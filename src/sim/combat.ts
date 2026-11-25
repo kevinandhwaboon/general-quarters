@@ -1,4 +1,4 @@
-import { fuseThreshold, GunSpec } from '../data/guns';
+import { fuseThreshold, GunSpec, ShellType } from '../data/guns';
 import { DEG, clamp, dir, interp } from '../math';
 import { columnAt, Part } from './hull';
 import { Ship } from './ship';
@@ -80,7 +80,7 @@ function classify(t: Ship, u: number, v: number, y: number, part: Part, turret: 
   return { u, v, y, zone, turret, obliquity, plate };
 }
 
-export type Outcome = 'ricochet' | 'defeated' | 'overpen' | 'penetration' | 'citadel';
+export type Outcome = 'ricochet' | 'defeated' | 'overpen' | 'penetration' | 'citadel' | 'burst';
 
 export interface HitResult {
   impact: Impact;
@@ -93,8 +93,12 @@ export interface HitResult {
   magazine: boolean;
 }
 
-/** Armour check and damage for one AP shell. realKm is the real-equivalent range. */
-export function resolveHit(t: Ship, imp: Impact, gun: GunSpec, realKm: number): HitResult {
+/** Armour check and damage for one shell. realKm is the real-equivalent range. */
+export function resolveHit(t: Ship, imp: Impact, gun: GunSpec, realKm: number, kind: ShellType = 'ap'): HitResult {
+  return kind === 'he' ? resolveHE(t, imp, gun) : resolveAP(t, imp, gun, realKm);
+}
+
+function resolveAP(t: Ship, imp: Impact, gun: GunSpec, realKm: number): HitResult {
   const pen = interp(gun.penNormal, realKm);
   const cos = Math.cos(imp.obliquity);
   const effective = imp.plate / Math.max(cos, 0.05);
@@ -144,6 +148,65 @@ export function resolveHit(t: Ship, imp: Impact, gun: GunSpec, realKm: number): 
   return { impact: imp, outcome, effective, pen, damage, notes, critical, magazine };
 }
 
+/**
+ * HE shell: an instantaneous fuse, so it bursts on whatever it strikes first. Plates thinner than
+ * the shell can blow through are holed and it bursts behind them; against real armour it bursts
+ * outside, wrecking fittings and starting fires but not reaching the machinery or magazines.
+ * Damage to systems (radar, secondaries, AA) with repair timers comes in the next step.
+ */
+function resolveHE(t: Ship, imp: Impact, gun: GunSpec): HitResult {
+  const he = gun.he;
+  const effective = imp.plate / Math.max(Math.cos(imp.obliquity), 0.05);
+  const inside = effective <= he.penMm;
+  const notes: string[] = [];
+  let outcome: Outcome; let damage: number; let critical = false; let magazine = false;
+  const a = t.c.armour;
+  const fire = (p: number) => { if (Math.random() < p) { t.fires++; notes.push('fire'); } };
+  switch (imp.zone) {
+    case 'superstructure':
+      outcome = 'penetration'; damage = he.damage * 0.3;
+      if (imp.y > 14 && Math.random() < 0.4) { t.director = Math.max(0.2, t.director - 0.3); notes.push('director damaged'); critical = true; }
+      fire(0.5);
+      break;
+    case 'funnel':
+      outcome = 'penetration'; damage = he.damage * 0.2;
+      // uptakes wrecked: boiler draught suffers; armoured ships keep most of their speed
+      if (Math.random() < 0.45) { t.engines = Math.max(inside && a.belt < he.penMm ? 0.3 : 0.6, t.engines - 0.08); notes.push('uptakes damaged'); }
+      fire(0.25);
+      break;
+    case 'conning':
+      outcome = inside ? 'penetration' : 'burst'; damage = he.damage * (inside ? 0.4 : 0.1);
+      if (Math.random() < (inside ? 0.5 : 0.15)) { t.director = Math.max(0.2, t.director - (inside ? 0.4 : 0.15)); notes.push('bridge hit, director damaged'); critical = inside; }
+      break;
+    case 'turretFace': case 'turretRoof': {
+      outcome = 'burst'; damage = he.damage * 0.08;
+      const tu = t.turrets[imp.turret];
+      if (tu.alive && Math.random() < 0.4) { tu.jam = Math.max(tu.jam, 20); notes.push(`turret ${imp.turret + 1} jammed`); }
+      break;
+    }
+    case 'belt': case 'deck':
+      if (inside) {
+        // a thin-skinned ship: the burst reaches the machinery spaces
+        outcome = 'citadel'; damage = he.damage * 0.8; critical = true;
+        const r = Math.random();
+        if (Math.abs(imp.u) < 40 && r < 0.5) { t.engines = Math.max(0.15, t.engines - 0.3); notes.push(Math.random() < 0.5 ? 'boiler room hit' : 'engine room hit'); }
+        else if (imp.y < 1.2) { t.flooding += 1; t.listSide = imp.v >= 0 ? 1 : -1; notes.push('flooding'); }
+        fire(0.5);
+      } else { outcome = 'burst'; damage = he.damage * 0.06; fire(0.1); }
+      break;
+    default: // upper side, bow and stern
+      if (inside) {
+        outcome = 'penetration'; damage = he.damage * 0.35;
+        if (imp.y < 1.6) { t.flooding += 1; t.listSide = imp.v >= 0 ? 1 : -1; notes.push('holed at the waterline'); }
+        else if (imp.zone === 'ends' && imp.u < a.citadel[0] && Math.random() < 0.25) { t.rudderJam = Math.random() < 0.5 ? 0.4 : -0.4; notes.push('steering damaged, rudder jammed'); critical = true; }
+        fire(0.45);
+      } else { outcome = 'burst'; damage = he.damage * 0.08; fire(0.15); }
+  }
+  t.hp -= damage;
+  t.fires = Math.min(t.fires, 8);
+  return { impact: imp, outcome, effective, pen: he.penMm, damage, notes, critical, magazine };
+}
+
 export const OUTCOME_LABEL: Record<Outcome, string> = {
-  ricochet: 'ricochet', defeated: 'armour held', overpen: 'over-penetration', penetration: 'penetration', citadel: 'CITADEL',
+  ricochet: 'ricochet', defeated: 'armour held', overpen: 'over-penetration', penetration: 'penetration', citadel: 'CITADEL', burst: 'burst on armour',
 };

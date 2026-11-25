@@ -1,5 +1,5 @@
 import { KN, toReal } from '../config';
-import { GunSpec } from '../data/guns';
+import { GunSpec, SHELL_LABEL, ShellType } from '../data/guns';
 import { ShipClass } from '../data/ships';
 import { bearing, clamp, DEG, deg3, hms, interp, km, wrap } from '../math';
 import { Zone, ZONE_LABEL } from '../sim/combat';
@@ -84,17 +84,34 @@ export class Hud {
       <div class="chips">${tur}${chip('Director ' + Math.round(s.director * 100) + '%', s.director > 0.8 ? 'ok' : s.director > 0.4 ? 'warn' : 'bad')}${chip(s.radar ? 'FC radar' : 'Optical only', s.radar ? 'ok' : 'warn')}${chip('Engines ' + Math.round(s.engines * 100) + '%', s.engines > 0.8 ? 'ok' : s.engines > 0.5 ? 'warn' : 'bad')}${chip('Fires ' + s.fires, s.fires ? 'bad' : 'ok')}${chip('Flooding ' + s.flooding, s.flooding ? 'bad' : 'ok')}</div>`;
   }
 
+  /** Shell selector with rounds left; the button for the ordered type is lit. */
+  private ammoHtml(s: Ship) {
+    const types: ShellType[] = ['ap', 'he'];
+    const desc: Record<ShellType, string> = { ap: 'armour-piercing: for armoured targets', he: 'high explosive: superstructure, fires, light ships' };
+    const btns = types.map(k => {
+      const n = s.ammo[k], full = s.c.ammo[k];
+      const cls = n === 0 ? 'bad' : n < full * 0.2 ? 'warn' : '';
+      return `<button class="cmd${s.shellType === k ? ' on' : ''}" data-shell="${k}" title="${desc[k]}"><span>${SHELL_LABEL[k]}</span><span class="n ${cls}">${n}/${full}</span></button>`;
+    }).join('');
+    const changing = s.turrets.some(tu => tu.alive && (tu.hoist || (tu.loaded && tu.loaded !== s.shellType)));
+    const empty = s.ammo[s.shellType] === 0;
+    return `<div class="ammo">${btns}</div>
+      ${empty ? `<div class="tip">${SHELL_LABEL[s.shellType]} magazines are empty. Change shell type to keep firing.</div>`
+        : changing ? `<div class="note">Changing to ${SHELL_LABEL[s.shellType]}: turrets fire the rounds already loaded and in the hoists first.</div>` : ''}`;
+  }
+
   private renderFc(s: Ship, est: Estimate) {
     const fc = s.fc, t = fc.target;
-    if (!t || !t.alive) { $('fc').innerHTML = `<div class="note">${t && !t.alive ? 'Target destroyed. ' : ''}No target. Click the enemy ship or press <b>T</b> to engage.</div>`; return; }
+    if (!t || !t.alive) { $('fc').innerHTML = `${this.ammoHtml(s)}<div class="note">${t && !t.alive ? 'Target destroyed. ' : ''}No target. Click the enemy ship or press <b>T</b> to engage. <b>F</b> changes shell type.</div>`; return; }
     const d = Math.hypot(t.x - s.x, t.z - s.z), real = toReal(d);
     const q = fc.quality();
     const rows = s.turrets.map((tu, i) => {
       const rel = wrap(bearing(s.x, s.z, t.x, t.z) - s.heading);
       const bears = canBear(tu.def, rel);
-      const st = !tu.alive ? '<span class="bad">destroyed</span>' : tu.jam > 0 ? `<span class="warn">jammed ${Math.ceil(tu.jam)} s</span>` : !bears ? '<span class="warn">masked</span>' : tu.reload > 0 ? `loading ${Math.ceil(tu.reload)} s` : '<span class="ok">ready</span>';
+      const st = !tu.alive ? '<span class="bad">destroyed</span>' : !tu.loaded ? '<span class="bad">no rounds</span>' : tu.jam > 0 ? `<span class="warn">jammed ${Math.ceil(tu.jam)} s</span>` : !bears ? '<span class="warn">masked</span>' : tu.reload > 0 ? `loading ${Math.ceil(tu.reload)} s` : '<span class="ok">ready</span>';
       const fill = tu.alive ? 1 - tu.reload / s.c.gun.reload : 0;
-      return `<div class="tur"><span>Turret ${i + 1}</span><div class="rl"><i style="width:${Math.round(clamp(fill, 0, 1) * 100)}%"></i></div><span class="st">${st}</span></div>`;
+      const ld = tu.alive && tu.loaded ? `<span class="ld${tu.loaded !== s.shellType ? ' warn' : ''}" title="loaded${tu.hoist ? `; ${SHELL_LABEL[tu.hoist]} still in the hoist` : ''}">${SHELL_LABEL[tu.loaded]}${tu.hoist ? '+' : ''}</span>` : '<span class="ld">—</span>';
+      return `<div class="tur"><span>Turret ${i + 1}</span><div class="rl"><i style="width:${Math.round(clamp(fill, 0, 1) * 100)}%"></i></div>${ld}<span class="st">${st}</span></div>`;
     }).join('');
     const lastCls = fc.last ? (fc.last.kind === 'hit' ? 'bad' : fc.last.kind === 'straddle' ? 'warn' : '') : '';
     let zoneHtml = '';
@@ -104,7 +121,7 @@ export class Hud {
         <div class="legend">${entries.map(([z, n]) => `<span style="--c:${ZONE_COLOUR[z]}">${ZONE_LABEL[z]} ${Math.round(n / est.hits * 100)}%</span>`).join('')}</div>`;
     }
     const turning = Math.abs(s.turnRate) / DEG > 0.4;
-    $('fc').innerHTML = `<dl class="stats">
+    $('fc').innerHTML = `${this.ammoHtml(s)}<dl class="stats">
         <dt>Target</dt><dd>${t.name}</dd>
         <dt>Range</dt><dd>${km(real)}</dd>
         <dt>Guns bearing</dt><dd class="${est && est.guns < est.total ? 'warn' : ''}">${est ? `${est.guns} of ${est.total}` : '—'}</dd>
@@ -115,7 +132,7 @@ export class Hud {
         <dt>Salvos · straddles · hits</dt><dd>${fc.salvos} · ${fc.straddles} · ${fc.hits}</dd>
         <dt>Hit chance per shell</dt><dd class="warn">${est ? (est.pHit * 100).toFixed(1) + '%' : '—'}</dd>
         <dt>Expected hits per salvo</dt><dd>${est ? (est.pHit * est.guns).toFixed(2) : '—'}</dd>
-        <dt>…that penetrate</dt><dd>${est ? (est.pPen * est.guns).toFixed(2) : '—'}</dd></dl>
+        <dt>…that ${s.shellType === 'he' ? 'burst inside' : 'penetrate'}</dt><dd>${est ? (est.pPen * est.guns).toFixed(2) : '—'}</dd></dl>
       ${zoneHtml}
       <div class="turrets">${rows}</div>
       ${turning ? '<div class="tip">You are turning. The director loses its solution while the ship swings; steady up before the next salvo.</div>' : ''}`;
@@ -141,6 +158,7 @@ export class Hud {
       <tr><td>Target aspect</td><td>${a}° · ${word}</td></tr>
       <tr><td>Angle of fall at ${km(realKm * 1000)}</td><td>${(fall / DEG).toFixed(1)}°</td></tr>
       <tr><td>Our AP penetration (normal)</td><td>${Math.round(pen)} mm</td></tr>
+      <tr><td>Our HE (${g.he.name}) bursts behind</td><td>up to ${g.he.penMm} mm</td></tr>
       <tr><td>Their belt ${t.c.armour.belt} mm → effective</td><td>${Math.round(b.eff)} mm ${res(b.eff, b.obl)}</td></tr>
       <tr><td>Their deck ${t.c.armour.deck} mm → effective</td><td>${Math.round(dk.eff)} mm ${res(dk.eff, dk.obl)}</td></tr>
       <tr class="sub"><td colspan="2">Your exposure to their ${eg.name}</td></tr>

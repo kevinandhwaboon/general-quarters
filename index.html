@@ -85,7 +85,10 @@ h2{font:700 25px/1.02 var(--f-display);letter-spacing:.02em;margin:2px 0 1px}
 .qbar{height:6px;background:#1a252e;position:relative;margin:4px 0 2px}
 .qbar i{position:absolute;inset:0 auto 0 0;background:var(--accent)}
 .turrets{display:flex;flex-direction:column;gap:3px;margin:8px 0}
-.tur{display:grid;grid-template-columns:58px minmax(0,1fr) 92px;gap:8px;align-items:center;font-size:12px}
+.tur{display:grid;grid-template-columns:58px minmax(0,1fr) 26px 92px;gap:8px;align-items:center;font-size:12px}
+.tur .ld{font:600 11px var(--f-mono);color:var(--muted)} .tur .ld.warn{color:var(--accent)}
+.ammo{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:0 0 8px}
+.ammo .n{font:500 11px var(--f-mono);color:var(--muted)} .ammo .n.warn{color:var(--accent)} .ammo .n.bad{color:var(--foe)}
 .tur .rl{height:5px;background:#1a252e;position:relative}
 .tur .rl i{position:absolute;inset:0 auto 0 0;background:var(--friend)}
 .tur .st{font:500 11px var(--f-mono);text-align:right;color:var(--muted)}

@@ -1,4 +1,5 @@
 import { FLIGHT_TIME_SCALE, toReal } from '../config';
+import { SHELL_LABEL, ShellType } from '../data/guns';
 import { bearing, clamp, DEG, dir, gauss, interp, rnd, wrap } from '../math';
 import { hitTest, HitResult, Impact, OUTCOME_LABEL, resolveHit, Zone, ZONE_LABEL } from './combat';
 import { canBear, restAngle, Ship } from './ship';
@@ -19,12 +20,13 @@ export interface Shell {
   T: number;
   apex: number;
   turret: number;
+  kind: ShellType;
 }
 
 interface Salvo { id: number; shooter: Ship; target: Ship; left: number; along: number[]; hits: number; straddle: boolean; }
 
 export type SimEvent =
-  | { type: 'fire'; ship: Ship; turret: number }
+  | { type: 'fire'; ship: Ship; turret: number; guns: number; kind: ShellType }
   | { type: 'splash'; shell: Shell; x: number; z: number }
   | { type: 'hit'; shell: Shell; result: HitResult }
   | { type: 'log'; text: string; cls: '' | 'hit' | 'crit' | 'own' }
@@ -106,6 +108,8 @@ export class World {
     s.turrets.forEach((tu, i) => {
       tu.reload = Math.max(0, tu.reload - dt);
       if (!tu.alive) return;
+      // an empty turret loads as soon as rounds of the ordered type are available
+      if (!tu.loaded) { s.reloadTurret(tu); if (tu.loaded) tu.reload = Math.max(tu.reload, g.reload); }
       const relT = aim ? wrap(aim.b - s.heading) : null;
       const bears = relT !== null && canBear(tu.def, relT);
       const want = bears && relT !== null ? relT : restAngle(tu.def);
@@ -117,7 +121,7 @@ export class World {
       tu.rel = tu.def.fwd ? next : wrap(next + Math.PI);
       if (bears && inRange) {
         bearingCount++;
-        if (Math.abs(goal - next) < 1.2 * DEG && tu.reload <= 0 && tu.jam <= 0) ready.push(i);
+        if (Math.abs(goal - next) < 1.2 * DEG && tu.reload <= 0 && tu.jam <= 0 && tu.loaded) ready.push(i);
       }
     });
     if (!t || !aim || !inRange || s.holdFire || ready.length === 0) { s.salvoWait = 0; return; }
@@ -139,18 +143,24 @@ export class World {
     const jr = gauss() * 0.004 * real, jd = gauss() * 0.001 * real;
     for (const i of turrets) {
       const tu = s.turrets[i];
+      const kind = tu.loaded!;
+      const guns = Math.min(tu.def.guns, s.ammo[kind]);
+      if (guns <= 0) { tu.loaded = null; continue; }
+      s.ammo[kind] -= guns;
       tu.reload = g.reload * rnd(0.95, 1.08);
+      s.reloadTurret(tu);
       const mx = s.x + fx * tu.def.x, mz = s.z + fz * tu.def.x;
-      for (let k = 0; k < tu.def.guns; k++) {
+      for (let k = 0; k < guns; k++) {
         const ea = jr + gauss() * g.dispRange * real, ed = jd + gauss() * g.dispDeflection * real;
         const lx = aim.x + aim.ux * ea + aim.rx * ed, lz = aim.z + aim.uz * ea + aim.rz * ed;
         const b = bearing(mx, mz, lx, lz), [dx, dz] = dir(b);
         this.shells.push({ id: this.nextShell++, salvo: id, shooter: s, target: t, x0: mx, y0: tu.def.h + 2, z0: mz, lx, lz, dx, dz, fall, realKm: aim.realKm,
-          t: 0, T: aim.T * rnd(0.98, 1.02), apex: Math.hypot(lx - mx, lz - mz) * Math.tan(fall) * 0.35 + 60, turret: i });
+          t: 0, T: aim.T * rnd(0.98, 1.02), apex: Math.hypot(lx - mx, lz - mz) * Math.tan(fall) * 0.35 + 60, turret: i, kind });
         n++;
       }
-      this.events.push({ type: 'fire', ship: s, turret: i });
+      this.events.push({ type: 'fire', ship: s, turret: i, guns, kind });
     }
+    if (n === 0) return;
     s.fc.salvos++;
     this.salvos.set(id, { id, shooter: s, target: t, left: n, along: [], hits: 0, straddle: false });
   }
@@ -160,11 +170,11 @@ export class World {
     const imp: Impact | null = t.alive || t.sinkT < 30 ? hitTest(t, sh.lx, sh.lz, sh.dx, sh.dz, sh.fall) : null;
     const sv = this.salvos.get(sh.salvo);
     if (imp) {
-      const res = resolveHit(t, imp, sh.shooter.c.gun, sh.realKm);
+      const res = resolveHit(t, imp, sh.shooter.c.gun, sh.realKm, sh.kind);
       this.events.push({ type: 'hit', shell: sh, result: res });
       if (sv) sv.hits++;
       const who = sh.shooter.side === 'player' ? 'hit' : 'crit';
-      const text = `${sh.shooter.name.replace('USS ', '')} → ${t.name.replace('USS ', '')}: ${ZONE_LABEL[imp.zone as Zone]} · ${OUTCOME_LABEL[res.outcome]}${res.notes.length ? ' · ' + res.notes.join(', ') : ''}`;
+      const text = `${sh.shooter.name.replace('USS ', '')} → ${t.name.replace('USS ', '')}: ${SHELL_LABEL[sh.kind]} · ${ZONE_LABEL[imp.zone as Zone]} · ${OUTCOME_LABEL[res.outcome]}${res.notes.length ? ' · ' + res.notes.join(', ') : ''}`;
       this.log(text, res.critical ? 'crit' : who === 'hit' ? 'hit' : '');
       if (res.magazine && t.alive) { t.magazine = true; t.hp = 0; this.events.push({ type: 'magazine', ship: t }); }
       if (t.alive && t.hp <= 0) { t.alive = false; t.hp = 0; this.log(`${t.name} ${t.magazine ? 'has blown up' : 'is sinking'}`, 'crit'); }
@@ -216,11 +226,12 @@ export class World {
       const imp = hitTest(t, px - t.vxPred(aim.T), pz - t.vzPred(aim.T), aim.ux, aim.uz, fall, 3);
       if (imp) {
         hits++; zones[imp.zone] = (zones[imp.zone] ?? 0) + 1;
-        const pen = interp(g.penNormal, aim.realKm);
-        if (pen >= imp.plate / Math.max(Math.cos(imp.obliquity), 0.05) && imp.obliquity < 65 * DEG) pens++;
+        const eff = imp.plate / Math.max(Math.cos(imp.obliquity), 0.05);
+        // AP: defeats the plate without glancing off. HE: blows through and bursts inside.
+        if (s.shellType === 'he' ? eff <= g.he.penMm : interp(g.penNormal, aim.realKm) >= eff && imp.obliquity < 65 * DEG) pens++;
       }
     }
-    const guns = s.turrets.reduce((a, tu) => a + (tu.alive && canBear(tu.def, wrap(aim.b - s.heading)) ? tu.def.guns : 0), 0);
+    const guns = s.turrets.reduce((a, tu) => a + (tu.alive && tu.loaded && canBear(tu.def, wrap(aim.b - s.heading)) ? Math.min(tu.def.guns, s.ammo[tu.loaded]) : 0), 0);
     const total = s.turrets.reduce((a, tu) => a + tu.def.guns, 0);
     return { pHit: hits / samples, pPen: pens / samples, zones, hits, guns, total, aim, fall };
   }

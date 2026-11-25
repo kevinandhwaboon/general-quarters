@@ -1,4 +1,5 @@
 import { KN, toReal } from '../config';
+import { ShellType } from '../data/guns';
 import { ShipClass, TurretDef } from '../data/ships';
 import { bearing, clamp, DEG, dir, gauss, wrap } from '../math';
 
@@ -19,6 +20,10 @@ export interface TurretState {
   alive: boolean;
   /** Seconds the turret stays jammed after a non-penetrating hit. */
   jam: number;
+  /** Shell type in the guns now; null when the magazine for the selected type is empty. */
+  loaded: ShellType | null;
+  /** Old-type rounds still in the hoist after a change of shell type; fired before the new type. */
+  hoist: ShellType | null;
 }
 
 /** A turret can only bear inside its arc; aft turrets measure from the stern. */
@@ -123,6 +128,10 @@ export class Ship {
   turrets: TurretState[];
   fc: FireControl;
   holdFire = false;
+  /** Main-battery shell type ordered by the player. */
+  shellType: ShellType = 'ap';
+  /** Main-battery rounds left in the magazines. */
+  ammo: Record<ShellType, number>;
   salvoWait = 0;
   /** Wake breadcrumbs. */
   hist: { x: number; z: number; h: number; t: number }[] = [];
@@ -134,12 +143,39 @@ export class Ship {
     this.c = c; this.name = name; this.side = side; this.x = x; this.z = z; this.heading = headingDeg * DEG;
     this.hp = c.hp;
     this.radar = c.nation === 'usn';
-    this.turrets = c.turrets.map(def => ({ def, rel: restAngle(def), reload: 0, alive: true, jam: 0 }));
+    this.ammo = { ...c.ammo };
+    this.turrets = c.turrets.map(def => ({ def, rel: restAngle(def), reload: 0, alive: true, jam: 0, loaded: 'ap' as ShellType, hoist: null }));
     this.fc = new FireControl(this);
     this.course = this.heading;
   }
 
   get maxSpeed() { return this.c.maxKn * KN; }
+
+  /**
+   * Order a change of shell type. Each turret still fires the round in its guns and the one already
+   * in the hoist, so the change takes effect after one or two salvos.
+   */
+  setShellType(k: ShellType) {
+    if (k === this.shellType) return;
+    this.shellType = k;
+    for (const tu of this.turrets) {
+      if (tu.loaded === k) tu.hoist = null;
+      else if (tu.loaded) tu.hoist = tu.loaded;
+    }
+  }
+
+  /** Start with every turret loaded with one type (a scenario can load the wrong one). */
+  loadAll(k: ShellType) {
+    this.shellType = k;
+    for (const tu of this.turrets) { tu.loaded = this.ammo[k] > 0 ? k : null; tu.hoist = null; }
+  }
+
+  /** What a turret loads after firing: the hoist round first, then the ordered type if any is left. */
+  reloadTurret(tu: TurretState) {
+    if (tu.hoist && this.ammo[tu.hoist] > 0) { tu.loaded = tu.hoist; tu.hoist = null; return; }
+    tu.hoist = null;
+    tu.loaded = this.ammo[this.shellType] > 0 ? this.shellType : null;
+  }
 
   update(dt: number) {
     if (!this.alive) {

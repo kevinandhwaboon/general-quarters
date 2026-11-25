@@ -3,6 +3,19 @@
  * Values are approximations from published range tables (NavWeaps-style);
  * they are good enough for gameplay and should be refined later.
  */
+/** Main-battery shell types the player can choose between. */
+export type ShellType = 'ap' | 'he';
+export const SHELL_LABEL: Record<ShellType, string> = { ap: 'AP', he: 'HE' };
+
+/** High-explosive (HC / common) shell: thin wall, large burster, bursts on contact. */
+export interface HeSpec {
+  name: string;
+  /** Thickest plate (mm, struck at right angles) the shell can blow through before bursting. */
+  penMm: number;
+  /** Damage points for a burst inside the hull; bursts against armour do a fraction of this. */
+  damage: number;
+}
+
 export interface GunSpec {
   name: string;
   caliberMm: number;
@@ -26,6 +39,8 @@ export interface GunSpec {
   barrelM: number;
   /** Turret traverse in degrees per second. */
   traverseDegS: number;
+  /** HE shell. Ballistics are taken from the AP tables (close enough for gameplay). */
+  he: HeSpec;
 }
 
 export const GUN_16IN_45_MK6: GunSpec = {
@@ -43,6 +58,8 @@ export const GUN_16IN_45_MK6: GunSpec = {
   damage: 14,
   barrelM: 18,
   traverseDegS: 4,
+  // 16 in Mark 13 HC: about 1,016 kg with a ~70 kg burster (about 7%)
+  he: { name: 'Mark 13 HC', penMm: 80, damage: 9 },
 };
 
 export const GUN_14IN_45_T41: GunSpec = {
@@ -60,6 +77,8 @@ export const GUN_14IN_45_T41: GunSpec = {
   damage: 9,
   barrelM: 16,
   traverseDegS: 3,
+  // Type 0 common (HE): about 625 kg
+  he: { name: 'Type 0 common', penMm: 65, damage: 7 },
 };
 
 /** Plates thinner than this do not arm the fuse of an AP shell: it passes straight through. */

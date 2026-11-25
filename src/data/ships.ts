@@ -1,4 +1,4 @@
-import { GunSpec, GUN_14IN_45_T41, GUN_16IN_45_MK6 } from './guns';
+import { GunSpec, GUN_14IN_45_T41, GUN_16IN_45_MK6, ShellType } from './guns';
 
 export type Nation = 'usn' | 'ijn';
 
@@ -65,6 +65,8 @@ export interface ShipClass {
   hp: number;
   armour: Armour;
   gun: GunSpec;
+  /** Main-battery rounds carried, by shell type. Semi-realistic placeholders (about 90-100 rounds per gun). */
+  ammo: Record<ShellType, number>;
   turrets: TurretDef[];
   fc: FireControlDef;
   crew: string;
@@ -86,6 +88,7 @@ export const NORTH_CAROLINA: ShipClass = {
   maxKn: 28, tacticalDiameter: 680, accel: 0.07, hp: 160,
   armour: { belt: 305, beltIncl: 15, beltTop: 2.6, beltBottom: -3.4, citadel: [-66, 72], upperSide: 38, deck: 140, ends: 25, turretFace: 406, turretRoof: 178, conning: 373, superstructure: 16 },
   gun: GUN_16IN_45_MK6,
+  ammo: { ap: 540, he: 360 }, // 9 guns, about 100 rounds per gun
   turrets: [
     { x: 62, h: 11, fwd: true, guns: 3, s: 1.35, maxRel: 150 },
     { x: 47, h: 15, fwd: true, guns: 3, s: 1.35, maxRel: 150 },
@@ -115,6 +118,7 @@ export const KONGO: ShipClass = {
   maxKn: 30, tacticalDiameter: 720, accel: 0.07, hp: 115,
   armour: { belt: 203, beltIncl: 0, beltTop: 2.2, beltBottom: -2.8, citadel: [-80, 80], upperSide: 152, deck: 90, ends: 25, turretFace: 254, turretRoof: 152, conning: 254, superstructure: 12 },
   gun: GUN_14IN_45_T41,
+  ammo: { ap: 480, he: 240 }, // 8 guns, about 90 rounds per gun
   turrets: [
     { x: 76, h: 10.6, fwd: true, guns: 2, s: 1.22, maxRel: 150 },
     { x: 63, h: 13.8, fwd: true, guns: 2, s: 1.22, maxRel: 150 },
