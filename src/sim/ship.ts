@@ -26,6 +26,12 @@ export interface TurretState {
   hoist: ShellType | null;
 }
 
+/** A secondary mount covers its own side, from 20 degrees off the bow to 20 degrees off the stern. */
+export function mountBears(m: { side: 1 | -1 }, rel: number): boolean {
+  const a = Math.abs(rel) / DEG;
+  return Math.sign(rel) === m.side && a >= 20 && a <= 160;
+}
+
 /** A turret can only bear inside its arc; aft turrets measure from the stern. */
 export function canBear(t: TurretDef, rel: number): boolean {
   const a = Math.abs(rel) / DEG;
@@ -50,14 +56,18 @@ export class FireControl {
   vx = 0;
   vz = 0;
 
-  constructor(private ship: Ship) {}
+  /** 'main' uses the main-battery director; 'sec' the secondary directors (not damaged separately yet). */
+  constructor(private ship: Ship, private battery: 'main' | 'sec' = 'main') {}
+
+  private get def() { return this.battery === 'main' ? this.ship.c.fc : this.ship.c.sec!.fc; }
+  private get director() { return this.battery === 'main' ? this.ship.director : 1; }
 
   assign(t: Ship | null) {
     this.target = t;
     this.salvos = 0; this.hits = 0; this.straddles = 0; this.last = null;
     if (!t) return;
     const real = toReal(Math.hypot(t.x - this.ship.x, t.z - this.ship.z));
-    const s0 = this.ship.c.fc.rangeErr0 * real / Math.max(0.35, this.ship.director);
+    const s0 = this.def.rangeErr0 * real / Math.max(0.35, this.director);
     this.er = gauss() * s0;
     this.ed = gauss() * s0 * 0.25;
     this.sig = s0;
@@ -68,8 +78,8 @@ export class FireControl {
   spot() {
     const t = this.target; if (!t) return;
     const real = toReal(Math.hypot(t.x - this.ship.x, t.z - this.ship.z));
-    const keep = this.ship.c.fc.spotKeep + (1 - this.ship.director) * 0.3;
-    const floor = 0.0035 * real * (this.ship.radar ? 0.7 : 1) / Math.max(0.35, this.ship.director);
+    const keep = this.def.spotKeep + (1 - this.director) * 0.3;
+    const floor = 0.0035 * real * (this.ship.radar ? 0.7 : 1) / Math.max(0.35, this.director);
     this.er = this.er * keep + gauss() * floor;
     this.ed = this.ed * keep + gauss() * floor * 0.3;
     this.sig = Math.hypot(this.sig * keep, floor);
@@ -118,6 +128,8 @@ export interface Mount extends SystemState {
   /** Position along the hull (m from amidships, + forward) and side (+1 starboard, -1 port). */
   x: number;
   side: 1 | -1;
+  /** Seconds until a secondary mount can fire again. */
+  reload: number;
 }
 
 export const isSecondary = (m: Mount) => m.kind === 'sec' || m.kind === 'dp';
@@ -126,7 +138,7 @@ export const isAA = (m: Mount) => m.kind !== 'sec';
 /** Build the secondary and AA mounts of a class, one per side at each listed position. */
 function buildMounts(c: ShipClass): Mount[] {
   const out: Mount[] = [];
-  const add = (kind: MountKind, label: string, x: number) => { for (const side of [1, -1] as const) out.push({ kind, label, x, side, status: 'ok', repair: 0 }); };
+  const add = (kind: MountKind, label: string, x: number) => { for (const side of [1, -1] as const) out.push({ kind, label, x, side, status: 'ok', repair: 0, reload: 0 }); };
   const role = c.secondaryRole ?? 'dp';
   for (const m of c.secondaries ?? []) add(role, role === 'dp' ? '5-inch mount' : '12.7 cm AA mount', m.x);
   if (c.cas) for (let i = 0; i < c.cas.n; i++) add('sec', '6-inch casemate', c.cas.x0 + (c.cas.x1 - c.cas.x0) * i / (c.cas.n - 1 || 1));
@@ -161,6 +173,12 @@ export class Ship {
   mounts: Mount[];
   turrets: TurretState[];
   fc: FireControl;
+  /** Secondary battery fire control: picks its own target among enemy ships in range. */
+  secFc: FireControl;
+  /** Secondary HE rounds left. */
+  secAmmo: number;
+  /** Seconds the secondaries have waited for slow mounts before firing a partial salvo. */
+  secWait = 0;
   holdFire = false;
   /** Main-battery shell type ordered by the player. */
   shellType: ShellType = 'ap';
@@ -181,6 +199,8 @@ export class Ship {
     this.ammo = { ...c.ammo };
     this.turrets = c.turrets.map(def => ({ def, rel: restAngle(def), reload: 0, alive: true, jam: 0, loaded: 'ap' as ShellType, hoist: null }));
     this.fc = new FireControl(this);
+    this.secFc = new FireControl(this, 'sec');
+    this.secAmmo = c.sec?.ammo ?? 0;
     this.course = this.heading;
   }
 

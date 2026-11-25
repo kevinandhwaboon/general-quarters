@@ -1,4 +1,4 @@
-import { GunSpec, GUN_14IN_45_T41, GUN_16IN_45_MK6, ShellType } from './guns';
+import { GunSpec, GUN_14IN_45_T41, GUN_16IN_45_MK6, GUN_5IN_38_MK12, GUN_6IN_50_41, ShellType } from './guns';
 
 export type Nation = 'usn' | 'ijn';
 
@@ -69,6 +69,8 @@ export interface ShipClass {
   ammo: Record<ShellType, number>;
   turrets: TurretDef[];
   fc: FireControlDef;
+  /** Secondary battery: the gun, guns per mount, HE rounds carried for all of it, and its fire control. */
+  sec?: { gun: GunSpec; gunsPerMount: number; ammo: number; fc: FireControlDef };
   crew: string;
   // visuals
   boxes: BoxDef[];
@@ -102,6 +104,7 @@ export const NORTH_CAROLINA: ShipClass = {
     { x: -62, h: 11, fwd: false, guns: 3, s: 1.35, minRel: 30 },
   ],
   fc: { rangeErr0: 0.006, spotKeep: 0.45, label: 'Mk 38 director + Mk 3 fire-control radar' },
+  sec: { gun: GUN_5IN_38_MK12, gunsPerMount: 2, ammo: 7000, fc: { rangeErr0: 0.012, spotKeep: 0.5, label: 'Mk 37 directors + Mk 4 radar' } }, // 20 guns, about 350 rounds per gun
   crew: 'Trained, radar-equipped',
   boxes: [
     { x: 4, l: 74, w: 24, y0: 0, y1: 4.5 },
@@ -137,6 +140,7 @@ export const KONGO: ShipClass = {
     { x: -74, h: 10.4, fwd: false, guns: 2, s: 1.22, minRel: 30 },
   ],
   fc: { rangeErr0: 0.018, spotKeep: 0.55, label: 'Type 94 director, optical rangefinders' },
+  sec: { gun: GUN_6IN_50_41, gunsPerMount: 1, ammo: 2100, fc: { rangeErr0: 0.03, spotKeep: 0.65, label: 'casemates, local and group control' } }, // 14 guns, about 150 rounds per gun
   crew: 'Veteran',
   boxes: [{ x: -2, l: 72, w: 22, y0: 0, y1: 4 }, { x: -56, l: 12, w: 10, y0: 0, y1: 5, win: true }, { x: 40, l: 12, w: 12, y0: 4, y1: 9, part: 'conning' }],
   funnels: [{ x: 13, r: 4, h: 13, y0: 4, rake: 8, plat: true }, { x: -16, r: 3.6, h: 11.5, y0: 4, rake: 8 }],

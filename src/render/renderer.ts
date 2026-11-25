@@ -184,11 +184,17 @@ export class Renderer3D {
   }
 
   private muzzle(ship: Ship, turret: number) {
-    const vis = this.vis.get(ship); if (!vis) return null;
+    const vis = this.vis.get(ship); if (!vis || turret < 0) return null;
     const g = vis.model.turrets[turret], p = new THREE.Vector3(); g.getWorldPosition(p);
     const ax = new THREE.Vector3(1, 0, 0).applyQuaternion(g.getWorldQuaternion(new THREE.Quaternion()));
     const len = (ship.c.gun.barrelM + 4) * ship.vs;
     return { p: p.clone().addScaledVector(ax, len), ax };
+  }
+
+  /** World position of a secondary mount on the drawn (possibly enlarged) model. */
+  private mountPos(ship: Ship, x: number, side: number) {
+    const vis = this.vis.get(ship); if (!vis) return null;
+    return vis.model.inner.localToWorld(new THREE.Vector3(x, ship.c.fb + 3, side * ship.c.B / 2));
   }
 
   private updateShells() {
@@ -200,13 +206,13 @@ export class Renderer3D {
       if (!sp) {
         sp = this.effects.sprite(texGlow, sh.shooter.side === 'player' ? 0xffd38a : 0xffb27a, true, 1);
         const mz = this.muzzle(sh.shooter, sh.turret);
-        sp.userData = mz ? { x: mz.p.x, y: mz.p.y, z: mz.p.z } : { x: sh.x0, y: sh.y0, z: sh.z0 };
+        sp.userData = { ...(mz ? { x: mz.p.x, y: mz.p.y, z: mz.p.z } : { x: sh.x0, y: sh.y0, z: sh.z0 }), k: Math.sqrt(sh.gun.caliberMm / 406) };
         this.shellSprites.set(sh.id, sp);
       }
       const u = clamp(sh.t / sh.T, 0, 1), s0 = sp.userData as { x: number; y: number; z: number };
       const end = this.displayNear(sh.target, sh.lx, sh.lz);
       sp.position.set(lerp(s0.x, end.x, u), lerp(s0.y, 2, u) + sh.apex * 4 * u * (1 - u), lerp(s0.z, end.z, u));
-      sp.scale.setScalar(Math.max(7 * mpp, 18));
+      sp.scale.setScalar(Math.max(7 * mpp, 18) * (sp.userData as { k: number }).k);
     }
     for (const [id, sp] of this.shellSprites) if (!seen.has(id)) { this.scene.remove(sp); sp.material.dispose(); this.shellSprites.delete(id); }
   }
@@ -217,18 +223,22 @@ export class Renderer3D {
       const mz = this.muzzle(e.ship, e.turret); if (!mz) return;
       this.effects.add('flash', mz.p.x, mz.p.y, mz.p.z, Math.max(55 * e.ship.vs, 12 * mpp));
       this.effects.add('gunsmoke', mz.p.x + mz.ax.x * 20, mz.p.y + 4, mz.p.z + mz.ax.z * 20, Math.max(90 * e.ship.vs, 16 * mpp));
+    } else if (e.type === 'secFire') {
+      const p = this.mountPos(e.ship, e.mount.x, e.mount.side); if (!p) return;
+      this.effects.add('flash', p.x, p.y, p.z, Math.max(18 * e.ship.vs, 5 * mpp));
     } else if (e.type === 'splash') {
       const t = e.shell.target, d = this.displayNear(t, e.x, e.z);
-      this.effects.add('splash', d.x, 0, d.z, Math.max(70 * Math.min(t.vs, 2), 14 * mpp) * (e.shell.shooter.c.gun.caliberMm / 406));
-      this.falls.push({ x: e.x, z: e.z, t: this.world.time, hit: false, target: t, shooter: e.shell.shooter });
+      this.effects.add('splash', d.x, 0, d.z, Math.max(70 * Math.min(t.vs, 2), 14 * mpp) * (e.shell.gun.caliberMm / 406));
+      if (e.shell.turret >= 0) this.falls.push({ x: e.x, z: e.z, t: this.world.time, hit: false, target: t, shooter: e.shell.shooter });
     } else if (e.type === 'hit') {
       const t = e.shell.target, vis = this.vis.get(t); if (!vis) return;
       const imp = e.result.impact, p = vis.model.inner.localToWorld(new THREE.Vector3(imp.u, imp.y, imp.v));
-      const big = e.result.outcome === 'citadel' || e.result.outcome === 'penetration';
-      this.effects.add('boom', p.x, p.y, p.z, Math.max((big ? 90 : 45) * t.vs, (big ? 16 : 9) * mpp));
+      const main = e.shell.turret >= 0, k = main ? 1 : 0.4;
+      const big = main && (e.result.outcome === 'citadel' || e.result.outcome === 'penetration');
+      this.effects.add('boom', p.x, p.y, p.z, Math.max((big ? 90 : 45) * t.vs, (big ? 16 : 9) * mpp) * k);
       if (big) this.effects.add('bsmoke', p.x, p.y + 8, p.z, 80 * t.vs);
       if (e.result.outcome === 'ricochet' || e.result.outcome === 'overpen') this.effects.add('splash', p.x + rnd(-20, 20), 0, p.z + rnd(-20, 20), 40 * Math.min(t.vs, 2));
-      this.falls.push({ x: e.shell.lx, z: e.shell.lz, t: this.world.time, hit: true, target: t, shooter: e.shell.shooter });
+      if (main) this.falls.push({ x: e.shell.lx, z: e.shell.lz, t: this.world.time, hit: true, target: t, shooter: e.shell.shooter });
     } else if (e.type === 'magazine') {
       const t = e.ship;
       this.effects.add('big', t.x, 60, t.z, 900 * t.vs);

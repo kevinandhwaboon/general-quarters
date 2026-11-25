@@ -4,7 +4,7 @@ import { ShipClass } from '../data/ships';
 import { bearing, clamp, DEG, deg3, hms, interp, km, wrap } from '../math';
 import { Zone, ZONE_LABEL } from '../sim/combat';
 import { hullProfile } from '../sim/hull';
-import { canBear, isAA, isSecondary, Mount, Ship, TELEGRAPH } from '../sim/ship';
+import { canBear, isAA, isSecondary, Mount, mountBears, Ship, TELEGRAPH } from '../sim/ship';
 import { World } from '../sim/world';
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -123,9 +123,31 @@ export class Hud {
         : changing ? `<div class="note">Changing to ${SHELL_LABEL[s.shellType]}: turrets fire the rounds already loaded and in the hoists first.</div>` : ''}`;
   }
 
+  /** Secondary battery: engages the nearest enemy ship in range on its own. */
+  private secHtml(s: Ship) {
+    const sec = s.c.sec; if (!sec) return '';
+    const fc = s.secFc, t = fc.target;
+    const n = s.mountCount(isSecondary);
+    let state: string;
+    if (s.secAmmo <= 0) state = '<span class="bad">out of ammunition</span>';
+    else if (s.holdFire) state = '<span class="warn">holding fire</span>';
+    else if (!t) state = `no enemy within ${sec.gun.maxRangeKm.toFixed(1)} km`;
+    else {
+      const rel = wrap(bearing(s.x, s.z, t.x, t.z) - s.heading);
+      const bears = s.mounts.filter(m => isSecondary(m) && m.status === 'ok' && mountBears(m, rel)).length;
+      state = `engaging ${t.name} at ${km(toReal(Math.hypot(t.x - s.x, t.z - s.z)))} · <span class="${bears ? '' : 'warn'}">${bears} mount${bears === 1 ? '' : 's'} bearing</span>`;
+    }
+    const last = t && fc.last ? ` · last salvo ${fc.last.text}` : '';
+    return `<div class="sub">Secondaries · ${sec.gun.name}, HE</div>
+      <div class="note">${state}${last}</div>
+      <dl class="stats"><dt>Mounts working</dt><dd>${n.ok} of ${n.total}${n.down ? ` · ${n.down} repairing` : ''}</dd>
+        <dt>Rounds</dt><dd class="${s.secAmmo < sec.ammo * 0.2 ? 'warn' : ''}">${s.secAmmo} / ${sec.ammo}</dd>
+        <dt>Salvos · hits</dt><dd>${fc.salvos} · ${fc.hits}</dd></dl>`;
+  }
+
   private renderFc(s: Ship, est: Estimate) {
     const fc = s.fc, t = fc.target;
-    if (!t || !t.alive) { $('fc').innerHTML = `${this.ammoHtml(s)}<div class="note">${t && !t.alive ? 'Target destroyed. ' : ''}No target. Click the enemy ship or press <b>T</b> to engage. <b>F</b> changes shell type.</div>`; return; }
+    if (!t || !t.alive) { $('fc').innerHTML = `${this.ammoHtml(s)}<div class="note">${t && !t.alive ? 'Target destroyed. ' : ''}No target. Click the enemy ship or press <b>T</b> to engage. <b>F</b> changes shell type.</div>${this.secHtml(s)}`; return; }
     const d = Math.hypot(t.x - s.x, t.z - s.z), real = toReal(d);
     const q = fc.quality();
     const rows = s.turrets.map((tu, i) => {
@@ -158,6 +180,7 @@ export class Hud {
         <dt>…that ${s.shellType === 'he' ? 'burst inside' : 'penetrate'}</dt><dd>${est ? (est.pPen * est.guns).toFixed(2) : '—'}</dd></dl>
       ${zoneHtml}
       <div class="turrets">${rows}</div>
+      ${this.secHtml(s)}
       ${turning ? '<div class="tip">You are turning. The director loses its solution while the ship swings; steady up before the next salvo.</div>' : ''}`;
   }
 

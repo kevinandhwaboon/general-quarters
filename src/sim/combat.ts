@@ -205,28 +205,30 @@ function resolveHE(t: Ship, imp: Impact, gun: GunSpec): HitResult {
   const notes: string[] = [];
   let outcome: Outcome; let damage: number; let critical = false; const magazine = false;
   const a = t.c.armour;
-  const fire = (p: number) => { if (Math.random() < p) { t.fires++; notes.push('fire'); } };
-  if (splinterSystems(t, imp, 1, notes)) critical = true;
+  // blast and splinter effects scale with the burster: a 5-inch shell does about half of what a 16-inch does
+  const k = clamp(gun.caliberMm / 300, 0.3, 1);
+  const fire = (p: number) => { if (Math.random() < p * k) { t.fires++; notes.push('fire'); } };
+  if (splinterSystems(t, imp, k, notes)) critical = true;
   switch (imp.zone) {
     case 'superstructure':
       outcome = 'penetration'; damage = he.damage * 0.3;
-      if (imp.y > 14 && Math.random() < 0.4) { t.director = Math.max(0.2, t.director - 0.3); notes.push('director damaged'); critical = true; }
+      if (imp.y > 14 && Math.random() < 0.4 * k) { t.director = Math.max(0.2, t.director - 0.3); notes.push('director damaged'); critical = true; }
       fire(0.5);
       break;
     case 'funnel':
       outcome = 'penetration'; damage = he.damage * 0.2;
       // uptakes wrecked: boiler draught suffers; armoured ships keep most of their speed
-      if (Math.random() < 0.45) { t.engines = Math.max(inside && a.belt < he.penMm ? 0.3 : 0.6, t.engines - 0.08); notes.push('uptakes damaged'); }
+      if (Math.random() < 0.45 * k) { t.engines = Math.max(inside && a.belt < he.penMm ? 0.3 : 0.6, t.engines - 0.08); notes.push('uptakes damaged'); }
       fire(0.25);
       break;
     case 'conning':
       outcome = inside ? 'penetration' : 'burst'; damage = he.damage * (inside ? 0.4 : 0.1);
-      if (Math.random() < (inside ? 0.5 : 0.15)) { t.director = Math.max(0.2, t.director - (inside ? 0.4 : 0.15)); notes.push('bridge hit, director damaged'); critical ||= inside; }
+      if (Math.random() < (inside ? 0.5 : 0.15) * k) { t.director = Math.max(0.2, t.director - (inside ? 0.4 : 0.15)); notes.push('bridge hit, director damaged'); critical ||= inside; }
       break;
     case 'turretFace': case 'turretRoof': {
       outcome = 'burst'; damage = he.damage * 0.08;
       const tu = t.turrets[imp.turret];
-      if (tu.alive && Math.random() < 0.4) { tu.jam = Math.max(tu.jam, 20); notes.push(`turret ${imp.turret + 1} jammed`); }
+      if (tu.alive && Math.random() < 0.4 * k) { tu.jam = Math.max(tu.jam, 20); notes.push(`turret ${imp.turret + 1} jammed`); }
       break;
     }
     case 'belt': case 'deck':
@@ -243,7 +245,7 @@ function resolveHE(t: Ship, imp: Impact, gun: GunSpec): HitResult {
       if (inside) {
         outcome = 'penetration'; damage = he.damage * 0.35;
         if (imp.y < 1.6) { t.flooding += 1; t.listSide = imp.v >= 0 ? 1 : -1; notes.push('holed at the waterline'); }
-        else if (imp.zone === 'ends' && imp.u < a.citadel[0] && Math.random() < 0.25) { t.rudderJam = Math.random() < 0.5 ? 0.4 : -0.4; notes.push('steering damaged, rudder jammed'); critical = true; }
+        else if (imp.zone === 'ends' && imp.u < a.citadel[0] && Math.random() < 0.25 * k) { t.rudderJam = Math.random() < 0.5 ? 0.4 : -0.4; notes.push('steering damaged, rudder jammed'); critical = true; }
         fire(0.45);
       } else { outcome = 'burst'; damage = he.damage * 0.08; fire(0.15); }
   }

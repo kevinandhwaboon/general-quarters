@@ -83,3 +83,44 @@ export const GUN_14IN_45_T41: GunSpec = {
 
 /** Plates thinner than this do not arm the fuse of an AP shell: it passes straight through. */
 export const fuseThreshold = (g: GunSpec) => g.caliberMm / 6;
+
+/**
+ * US 5 in/38 Mark 12 (twin Mark 28 mounts), firing 25 kg AA common at surface targets.
+ * Range table approximate (NavWeaps-style); 15.9 km at 45 degrees.
+ */
+export const GUN_5IN_38_MK12: GunSpec = {
+  name: '5 in/38 Mark 12',
+  caliberMm: 127,
+  shellKg: 25,
+  muzzleVelocity: 792,
+  reload: 4.5,
+  maxRangeKm: 15.9,
+  penNormal: [[0, 180], [5, 95], [10, 55], [13, 42], [15.9, 35]],
+  fallDeg: [[0, 0], [5, 4.5], [10, 14], [13, 24], [15.9, 45]],
+  flightS: [[0, 0], [5, 7.5], [10, 20], [13, 32], [15.9, 52]],
+  dispRange: 0.009,
+  dispDeflection: 0.003,
+  damage: 1.4,
+  barrelM: 4.8,
+  traverseDegS: 25,
+  he: { name: '5 in AA common', penMm: 12, damage: 0.8 },
+};
+
+/** IJN 15.2 cm/50 41st Year Type in casemates (elevation raised to 30 degrees in the reconstruction). */
+export const GUN_6IN_50_41: GunSpec = {
+  name: '15.2 cm/50 41st Year Type',
+  caliberMm: 152,
+  shellKg: 45.4,
+  muzzleVelocity: 850,
+  reload: 10,
+  maxRangeKm: 19,
+  penNormal: [[0, 230], [5, 140], [10, 85], [15, 55], [19, 45]],
+  fallDeg: [[0, 0], [5, 3.5], [10, 11], [15, 22], [19, 32]],
+  flightS: [[0, 0], [5, 7], [10, 17], [15, 32], [19, 46]],
+  dispRange: 0.012,
+  dispDeflection: 0.0035,
+  damage: 2.4,
+  barrelM: 7.6,
+  traverseDegS: 10,
+  he: { name: '15.2 cm common', penMm: 18, damage: 1.2 },
+};
