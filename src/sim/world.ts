@@ -82,6 +82,16 @@ export class World {
     if (s.fires > 0) { s.hp -= 0.04 * s.fires * dt; if (Math.random() < 0.012 * s.fires * dt) s.fires--; }
     if (s.flooding > 0) { s.hp -= 0.035 * s.flooding * dt; if (Math.random() < 0.004 * dt) s.flooding--; }
     for (const t of s.turrets) if (t.jam > 0) t.jam = Math.max(0, t.jam - dt);
+    // damage control brings knocked-out systems back
+    if (s.alive) {
+      for (const sys of [s.radarSet, ...s.mounts]) {
+        if (!sys || sys.status !== 'down') continue;
+        sys.repair -= dt;
+        if (sys.repair > 0) continue;
+        sys.status = 'ok'; sys.repair = 0;
+        if (sys === s.radarSet) this.log(`${s.name}: radar back in action`, s.side === 'player' ? 'own' : '');
+      }
+    }
     if (s.alive && s.hp <= 0) {
       s.alive = false; s.hp = 0;
       this.log(`${s.name} is sinking`, 'crit');

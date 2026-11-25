@@ -102,6 +102,38 @@ export class FireControl {
   }
 }
 
+export type MountKind = 'sec' | 'dp' | 'haa' | 'maa' | 'laa';
+export const MOUNT_LABEL: Record<MountKind, string> = { sec: 'secondary', dp: 'dual-purpose', haa: 'heavy AA', maa: 'medium AA', laa: 'light AA' };
+
+/** A system that can be put out of action by splinters and blast, then repaired by damage control. */
+export interface SystemState {
+  status: 'ok' | 'down' | 'destroyed';
+  /** Seconds until a 'down' system is back in action. */
+  repair: number;
+}
+
+export interface Mount extends SystemState {
+  kind: MountKind;
+  label: string;
+  /** Position along the hull (m from amidships, + forward) and side (+1 starboard, -1 port). */
+  x: number;
+  side: 1 | -1;
+}
+
+export const isSecondary = (m: Mount) => m.kind === 'sec' || m.kind === 'dp';
+export const isAA = (m: Mount) => m.kind !== 'sec';
+
+/** Build the secondary and AA mounts of a class, one per side at each listed position. */
+function buildMounts(c: ShipClass): Mount[] {
+  const out: Mount[] = [];
+  const add = (kind: MountKind, label: string, x: number) => { for (const side of [1, -1] as const) out.push({ kind, label, x, side, status: 'ok', repair: 0 }); };
+  const role = c.secondaryRole ?? 'dp';
+  for (const m of c.secondaries ?? []) add(role, role === 'dp' ? '5-inch mount' : '12.7 cm AA mount', m.x);
+  if (c.cas) for (let i = 0; i < c.cas.n; i++) add('sec', '6-inch casemate', c.cas.x0 + (c.cas.x1 - c.cas.x0) * i / (c.cas.n - 1 || 1));
+  for (const g of c.aa ?? []) for (const x of g.x) add(g.k === 'medium' ? 'maa' : 'laa', g.label, x);
+  return out;
+}
+
 export class Ship {
   readonly c: ShipClass;
   name: string;
@@ -124,7 +156,9 @@ export class Ship {
   engines = 1;
   rudderJam: number | null = null;
   director = 1;
-  radar: boolean;
+  /** Fire-control radar set, or null if none is fitted. */
+  radarSet: SystemState | null;
+  mounts: Mount[];
   turrets: TurretState[];
   fc: FireControl;
   holdFire = false;
@@ -142,11 +176,21 @@ export class Ship {
   constructor(c: ShipClass, name: string, side: 'player' | 'enemy', x: number, z: number, headingDeg: number) {
     this.c = c; this.name = name; this.side = side; this.x = x; this.z = z; this.heading = headingDeg * DEG;
     this.hp = c.hp;
-    this.radar = c.nation === 'usn';
+    this.radarSet = c.radar ? { status: 'ok', repair: 0 } : null;
+    this.mounts = buildMounts(c);
     this.ammo = { ...c.ammo };
     this.turrets = c.turrets.map(def => ({ def, rel: restAngle(def), reload: 0, alive: true, jam: 0, loaded: 'ap' as ShellType, hoist: null }));
     this.fc = new FireControl(this);
     this.course = this.heading;
+  }
+
+  /** Radar fitted and working. */
+  get radar() { return this.radarSet?.status === 'ok'; }
+
+  /** Working and total counts for a group of mounts. */
+  mountCount(f: (m: Mount) => boolean) {
+    const ms = this.mounts.filter(f);
+    return { ok: ms.filter(m => m.status === 'ok').length, down: ms.filter(m => m.status === 'down').length, total: ms.length };
   }
 
   get maxSpeed() { return this.c.maxKn * KN; }

@@ -74,7 +74,14 @@ export interface ShipClass {
   boxes: BoxDef[];
   funnels: FunnelDef[];
   masts: MastDef[];
+  /** Secondary mounts, one per side at each position (also drawn). */
   secondaries?: { x: number; z: number; y: number }[];
+  /** 'dp': dual-purpose (US 5-inch/38, counts as secondary and heavy AA); 'haa': AA only (IJN 12.7 cm). */
+  secondaryRole?: 'dp' | 'haa';
+  /** Light and medium AA guns: positions along the hull, one mount per side at each. Not drawn yet. */
+  aa?: { k: 'medium' | 'light'; label: string; x: number[] }[];
+  /** Fitted with fire-control radar. */
+  radar?: boolean;
   boats?: number[];
   cranes?: { x: number; z: number; dx: number; dz: number }[];
   catapults?: { x: number; z: number; r: number }[];
@@ -106,6 +113,10 @@ export const NORTH_CAROLINA: ShipClass = {
   funnels: [{ x: 6, r: 3.6, h: 13, y0: 4.5, plat: true }, { x: -10, r: 3.4, h: 12, y0: 4.5 }],
   masts: [{ x: 21, h: 40, k: 'tower', y0: 4.5 }, { x: -30, h: 24, k: 'pole', y0: 10 }],
   secondaries: [{ x: 20, z: 10.5, y: 4.5 }, { x: 10, z: 12, y: 0 }, { x: -2, z: 12, y: 0 }, { x: -14, z: 12, y: 0 }, { x: -24, z: 10.5, y: 4.5 }],
+  secondaryRole: 'dp',
+  radar: true,
+  // late 1942: four quadruple 1.1-inch and about twenty 20 mm Oerlikons (approximate)
+  aa: [{ k: 'medium', label: '1.1-inch quad', x: [30, -32] }, { k: 'light', label: '20 mm', x: [80, 44, 36, 16, 4, -8, -20, -40, -52, -80] }],
   boats: [-2, -18],
   cranes: [{ x: -95, z: 0, dx: -8, dz: 6 }],
   catapults: [{ x: -96, z: 7, r: 0.35 }, { x: -96, z: -7, r: -0.35 }],
@@ -132,6 +143,9 @@ export const KONGO: ShipClass = {
   masts: [{ x: 38, h: 40, k: 'pagoda', y0: 4 }, { x: -30, h: 22, k: 'tripod', y0: 4 }],
   cas: { n: 7, x0: 34, x1: -34, y: -2.6 },
   secondaries: [{ x: 0, z: 9, y: 4 }, { x: -24, z: 9, y: 4 }],
+  secondaryRole: 'haa',
+  // ten twin 25 mm mounts (approximate)
+  aa: [{ k: 'light', label: '25 mm twin', x: [24, 10, -2, -20, -32] }],
   boats: [2, -6],
   catapults: [{ x: -92, z: 0, r: 0.3 }],
 };

@@ -1,7 +1,7 @@
 import { fuseThreshold, GunSpec, ShellType } from '../data/guns';
 import { DEG, clamp, dir, interp } from '../math';
 import { columnAt, Part } from './hull';
-import { Ship } from './ship';
+import { Mount, Ship, SystemState } from './ship';
 
 export type Zone = 'belt' | 'upperSide' | 'deck' | 'ends' | 'endsDeck' | 'turretFace' | 'turretRoof' | 'conning' | 'superstructure' | 'funnel';
 export const ZONE_LABEL: Record<Zone, string> = {
@@ -80,6 +80,48 @@ function classify(t: Ship, u: number, v: number, y: number, part: Part, turret: 
   return { u, v, y, zone, turret, obliquity, plate };
 }
 
+/** Seconds damage control needs to bring a system back; fires on board slow the work. */
+const repairTime = (t: Ship) => (60 + Math.random() * 120) * (1 + 0.15 * t.fires);
+
+/**
+ * Splinters and blast from a burst near the upper deck or superstructure. Rolls against the
+ * radar and every secondary or AA mount close to the burst. power is 1 for an HE burst and lower
+ * for an AP shell that only punches through. Returns notes for the log; true if anything important.
+ */
+export function splinterSystems(t: Ship, imp: Impact, power: number, notes: string[]): boolean {
+  const high = imp.zone === 'superstructure' || imp.zone === 'conning' || imp.zone === 'funnel';
+  if (!high && imp.y < t.c.fb - 2.5) return false; // low on the hull: the upper deck is sheltered
+  let important = false;
+  const knock = (sys: SystemState, p: number): 'down' | 'destroyed' | null => {
+    if (sys.status === 'destroyed' || Math.random() >= p) return null;
+    if (Math.random() < 0.25) { sys.status = 'destroyed'; sys.repair = 0; return 'destroyed'; }
+    sys.status = 'down'; sys.repair = Math.max(sys.repair, repairTime(t)); return 'down';
+  };
+  // radar aerials sit high on the main mast or tower
+  if (t.radarSet && high && imp.y > 12) {
+    const mast = t.c.masts.reduce((a, m) => (m.h > a.h ? m : a), t.c.masts[0]);
+    if (mast && Math.abs(imp.u - mast.x) < 25) {
+      const r = knock(t.radarSet, 0.35 * power);
+      if (r) { notes.push(r === 'destroyed' ? 'radar destroyed' : 'radar out of action'); important = true; }
+    }
+  }
+  const side = Math.abs(imp.v) < 3 ? 0 : imp.v > 0 ? 1 : -1;
+  const hitMounts: Mount[] = [];
+  for (const m of t.mounts) {
+    const d = Math.abs(m.x - imp.u);
+    if (d > 12 || (side !== 0 && m.side !== side)) continue;
+    const r = knock(m, 0.55 * power * (1 - d / 14));
+    if (r) hitMounts.push(m);
+  }
+  if (hitMounts.length) {
+    const byLabel = new Map<string, number>();
+    for (const m of hitMounts) byLabel.set(m.label, (byLabel.get(m.label) ?? 0) + 1);
+    notes.push([...byLabel].map(([l, n]) => `${n > 1 ? n + ' × ' : ''}${l}`).join(', ') + ' knocked out');
+    important ||= hitMounts.some(m => m.kind !== 'laa');
+  }
+  return important;
+}
+
 export type Outcome = 'ricochet' | 'defeated' | 'overpen' | 'penetration' | 'citadel' | 'burst';
 
 export interface HitResult {
@@ -116,6 +158,7 @@ function resolveAP(t: Ship, imp: Impact, gun: GunSpec, realKm: number): HitResul
     if (imp.y < 1.6 && (imp.zone === 'ends' || imp.zone === 'upperSide')) { t.flooding += 1; t.listSide = imp.v >= 0 ? 1 : -1; notes.push('holed at the waterline'); }
     if (imp.zone === 'funnel' && Math.random() < 0.3) { t.engines = Math.max(0.4, t.engines - 0.08); notes.push('uptakes damaged'); }
     if (imp.zone === 'superstructure' && imp.y > 18 && Math.random() < 0.25) { t.director = Math.max(0.2, t.director - 0.4); notes.push('director hit'); critical = true; }
+    if (splinterSystems(t, imp, 0.35, notes)) critical = true;
   } else {
     // armed fuse: the shell detonates inside
     if (imp.zone === 'turretFace' || imp.zone === 'turretRoof') {
@@ -139,6 +182,7 @@ function resolveAP(t: Ship, imp: Impact, gun: GunSpec, realKm: number): HitResul
       if (Math.random() < 0.25) { t.rudderJam = Math.random() < 0.5 ? 0.4 : -0.4; notes.push('helm lost, rudder jammed'); }
     } else {
       outcome = 'penetration'; damage = gun.damage * 0.35;
+      if (splinterSystems(t, imp, 0.6, notes)) critical = true;
       if (Math.random() < 0.4) { t.fires++; notes.push('fire'); }
       if (imp.y < 1.6) { t.flooding += 1; t.listSide = imp.v >= 0 ? 1 : -1; notes.push('flooding'); }
     }
@@ -159,9 +203,10 @@ function resolveHE(t: Ship, imp: Impact, gun: GunSpec): HitResult {
   const effective = imp.plate / Math.max(Math.cos(imp.obliquity), 0.05);
   const inside = effective <= he.penMm;
   const notes: string[] = [];
-  let outcome: Outcome; let damage: number; let critical = false; let magazine = false;
+  let outcome: Outcome; let damage: number; let critical = false; const magazine = false;
   const a = t.c.armour;
   const fire = (p: number) => { if (Math.random() < p) { t.fires++; notes.push('fire'); } };
+  if (splinterSystems(t, imp, 1, notes)) critical = true;
   switch (imp.zone) {
     case 'superstructure':
       outcome = 'penetration'; damage = he.damage * 0.3;
@@ -176,7 +221,7 @@ function resolveHE(t: Ship, imp: Impact, gun: GunSpec): HitResult {
       break;
     case 'conning':
       outcome = inside ? 'penetration' : 'burst'; damage = he.damage * (inside ? 0.4 : 0.1);
-      if (Math.random() < (inside ? 0.5 : 0.15)) { t.director = Math.max(0.2, t.director - (inside ? 0.4 : 0.15)); notes.push('bridge hit, director damaged'); critical = inside; }
+      if (Math.random() < (inside ? 0.5 : 0.15)) { t.director = Math.max(0.2, t.director - (inside ? 0.4 : 0.15)); notes.push('bridge hit, director damaged'); critical ||= inside; }
       break;
     case 'turretFace': case 'turretRoof': {
       outcome = 'burst'; damage = he.damage * 0.08;

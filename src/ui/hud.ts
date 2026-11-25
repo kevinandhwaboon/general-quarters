@@ -4,7 +4,7 @@ import { ShipClass } from '../data/ships';
 import { bearing, clamp, DEG, deg3, hms, interp, km, wrap } from '../math';
 import { Zone, ZONE_LABEL } from '../sim/combat';
 import { hullProfile } from '../sim/hull';
-import { canBear, Ship, TELEGRAPH } from '../sim/ship';
+import { canBear, isAA, isSecondary, Mount, Ship, TELEGRAPH } from '../sim/ship';
 import { World } from '../sim/world';
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -69,6 +69,29 @@ export class Hud {
     this.renderAnalysis(s, t);
   }
 
+  /** Radar chip: fitted or not, and how long until a knocked-out set is repaired. */
+  private radarChip(s: Ship) {
+    const r = s.radarSet;
+    if (!r) return '<span class="chip warn">Optical only</span>';
+    if (r.status === 'ok') return '<span class="chip ok">FC radar</span>';
+    if (r.status === 'down') return `<span class="chip bad" title="Damage control is repairing it; optical fire control until then">Radar down ${Math.ceil(r.repair)} s</span>`;
+    return '<span class="chip bad">Radar destroyed</span>';
+  }
+
+  /** Chip for a group of mounts: working of total, with how many are being repaired. */
+  private mountChip(s: Ship, label: string, f: (m: Mount) => boolean, title: string) {
+    const n = s.mountCount(f);
+    if (!n.total) return '';
+    const cls = n.ok === n.total ? 'ok' : n.ok >= n.total * 0.6 ? 'warn' : 'bad';
+    return `<span class="chip ${cls}" title="${title}">${label} ${n.ok}/${n.total}${n.down ? ` · ${n.down} repairing` : ''}</span>`;
+  }
+
+  private systemsHtml(s: Ship) {
+    return this.radarChip(s)
+      + this.mountChip(s, 'Secondary', isSecondary, 'Secondary mounts working (both sides). They will engage ships in range on their own.')
+      + this.mountChip(s, 'AA', isAA, 'AA mounts working (heavy, medium and light). They will engage aircraft in range on their own.');
+  }
+
   private renderOwn(s: Ship) {
     const f = s.hp / s.c.hp, pct = Math.round(clamp(f, 0, 1) * 100);
     const chip = (txt: string, cls: string) => `<span class="chip ${cls}">${txt}</span>`;
@@ -81,7 +104,7 @@ export class Hud {
         <dt>Rudder</dt><dd class="${s.rudderJam !== null ? 'bad' : ''}">${s.rudderJam !== null ? 'JAMMED ' : ''}${Math.round(Math.abs(s.rudder) * 35)}° ${s.rudder > 0.02 ? 'stbd' : s.rudder < -0.02 ? 'port' : ''}</dd>
         <dt>Turn rate</dt><dd class="${Math.abs(s.turnRate) / DEG > 0.4 ? 'warn' : ''}">${(s.turnRate / DEG).toFixed(2)}°/s</dd>
       </dl>
-      <div class="chips">${tur}${chip('Director ' + Math.round(s.director * 100) + '%', s.director > 0.8 ? 'ok' : s.director > 0.4 ? 'warn' : 'bad')}${chip(s.radar ? 'FC radar' : 'Optical only', s.radar ? 'ok' : 'warn')}${chip('Engines ' + Math.round(s.engines * 100) + '%', s.engines > 0.8 ? 'ok' : s.engines > 0.5 ? 'warn' : 'bad')}${chip('Fires ' + s.fires, s.fires ? 'bad' : 'ok')}${chip('Flooding ' + s.flooding, s.flooding ? 'bad' : 'ok')}</div>`;
+      <div class="chips">${tur}${chip('Director ' + Math.round(s.director * 100) + '%', s.director > 0.8 ? 'ok' : s.director > 0.4 ? 'warn' : 'bad')}${this.systemsHtml(s)}${chip('Engines ' + Math.round(s.engines * 100) + '%', s.engines > 0.8 ? 'ok' : s.engines > 0.5 ? 'warn' : 'bad')}${chip('Fires ' + s.fires, s.fires ? 'bad' : 'ok')}${chip('Flooding ' + s.flooding, s.flooding ? 'bad' : 'ok')}</div>`;
   }
 
   /** Shell selector with rounds left; the button for the ordered type is lit. */
@@ -153,7 +176,8 @@ export class Hud {
     const eres = (eff: number, obl: number) => obl > 65 * DEG ? '<span class="pill amb">ricochet</span>' : epen >= eff ? '<span class="pill red">penetrated</span>' : '<span class="pill grn">holds</span>';
     const myZone = immuneZone(s.c, eg, myAspect), theirZone = immuneZone(t.c, g, aspect);
     const zt = (z: [number, number] | null) => (z ? `${z[0].toFixed(1)}–${z[1].toFixed(1)} km` : 'none');
-    $('tgtHead').innerHTML = `<h2>${t.name}</h2><div class="cls">${t.c.label} · ${t.alive ? (t.speed / KN).toFixed(0) + ' kn' : 'sinking'}</div>`;
+    $('tgtHead').innerHTML = `<h2>${t.name}</h2><div class="cls">${t.c.label} · ${t.alive ? (t.speed / KN).toFixed(0) + ' kn' : 'sinking'}</div>
+      <div class="chips">${this.systemsHtml(t)}<span class="chip ${t.director > 0.8 ? 'ok' : t.director > 0.4 ? 'warn' : 'bad'}">Director ${Math.round(t.director * 100)}%</span></div>`;
     $('tgtCalc').innerHTML = `<table class="calc">
       <tr><td>Target aspect</td><td>${a}° · ${word}</td></tr>
       <tr><td>Angle of fall at ${km(realKm * 1000)}</td><td>${(fall / DEG).toFixed(1)}°</td></tr>
