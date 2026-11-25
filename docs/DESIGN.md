@@ -20,6 +20,8 @@ A real-time strategy game about **Second World War naval combat in the Pacific**
 | Control | Individual ships. Several selected ships can be given **formation orders** |
 | Gunnery | RA2-simple: select a ship, click a target. **The player never aims.** Accuracy and damage depend on the ship, range and the **angles** of firer and target. Positioning is the skill; going broadside is a risk/reward choice |
 | Fog of war | What your ships would know, like RTS fog but about **contacts, not terrain**: identified, classified (silhouette only), detected (unknown blip with an uncertainty area), lost (last-seen marker). Sensors: visual, night, radar (by nation and year), sonar, aircraft. Tactical vision is shared instantly; long-range reports (scout planes, coastwatchers) arrive late and may be wrong. The enemy AI plays under the same fog |
+| Secondary batteries | Fire **automatically** at enemy ships within their range (mainly destroyers and cruisers), independent of the main-battery target |
+| Anti-aircraft | Fires **automatically** at aircraft within range. Heavy (dual-purpose 5"), medium (40 mm) and light (20 mm) AA by range band |
 | Friendly fire | The player cannot order it, but stray shells and torpedoes can hit friendly ships |
 | Multiplayer | Not for now |
 
@@ -33,7 +35,7 @@ Real engagements are fought at distances of hundreds of ship lengths, too far ap
 - **Ships are drawn larger when zoomed out**: up to `SHIP_VIS_MAX` (3×), with beam and height boosted a little more. Enlargement is capped at 0.8 × (distance to the nearest ship) / (ship length), so crowded formations and moored pairs never overlap. Close up, ships are drawn at 1×.
 - Splashes and hit markers near an enlarged ship are drawn scaled by the same factor, so near-misses still look like near-misses.
 - **Semantic zoom**: close-up sprites → battle view → map symbols at strategic zoom. Carrier operations work on the zoomed-out layer.
-- Aircraft altitude is drawn compressed (1:6) with ground markers (mockup decision; needs user confirmation).
+- Aircraft altitude is drawn compressed (1:6) with ground markers. Accepted as reasonable for now; revisit once the air layer is playable.
 - Time compression goes from pause up to 8× in the proof of concept, and up to 60× for carrier operations.
 
 ## 4. Combat model (implemented in the proof of concept)
@@ -54,6 +56,7 @@ See `README.md` for file pointers.
 - **Daytime look approved.** Night battles come later as a lighting mode.
 - Battle-view ship size approved (about 3×).
 - Sidebar panels are **collapsible**. The hit-chance breakdown is "good to have, but collapsible".
+- **More ship detail is wanted** beyond the current approved level (e.g. textured plating, weathering, finer secondary and AA mounts).
 - Real ship designs are public historical information; never copy other people's models, drawings or game assets.
 
 ## 6. Scenarios
@@ -64,7 +67,7 @@ See `README.md` for file pointers.
 | Savo Island, Aug 1942 | Compact night action, fog of war, torpedoes | Mockup exists |
 | Surigao Strait, Oct 1944 | Crossing the T, torpedo runs | |
 | Samar, Oct 1944 | Delaying action | |
-| Pearl Harbor, Dec 1941 | Air strike on moored ships; tests the carrier layer | Mockup exists. Open question: full scenario, or only a test of the carrier mechanics? |
+| ~~Pearl Harbor, Dec 1941~~ | Was only a test of the carrier layer | Mockup exists. **Shelved**; not a planned scenario |
 | Midway, Coral Sea | Carrier against carrier | Needs the air and operational layer |
 
 ## 7. Roadmap
@@ -75,7 +78,7 @@ See `README.md` for file pointers.
 3. **Torpedoes and destroyers**: Long Lance spreads, combing tracks, screens.
 4. **Visibility and night**: contact levels, searchlights, star shells, radar against optics, smoke.
 5. **First historical scenario** (Guadalcanal, November 1942) with victory conditions and a results screen.
-6. **Carriers and the air layer** (Pearl Harbor, Midway).
+6. **Carriers and the air layer** (Midway, Coral Sea).
 
 Alongside: unit tests for the simulation, a seeded random-number generator for replays, and checking gun and armour data against sources.
 
@@ -88,7 +91,5 @@ Alongside: unit tests for the simulation, a seeded random-number generator for r
 
 ## 9. Open questions
 
-- Is the 1:6 aircraft altitude compression readable?
-- Pearl Harbor: a full scenario, or only a carrier-mechanics test?
-- How far to go with ship detail (textured plating, weathering)?
-- High-explosive shells and secondary batteries: when?
+- High-explosive shells: when, and whether the player chooses the shell type or the ship picks it automatically?
+- When to schedule the automatic secondary and AA fire (likely with squadrons, before torpedoes; AA needs aircraft first).
