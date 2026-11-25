@@ -1,3 +1,4 @@
+import { SHELL_LABEL, ShellType } from './data/guns';
 import { KONGO, NORTH_CAROLINA } from './data/ships';
 import { bearing, clamp, DEG, wrap } from './math';
 import { Overlay } from './render/overlay';
@@ -50,6 +51,11 @@ resize();
 function engage() { if (player.alive && enemy.alive) { player.fc.assign(enemy); hud.pushLog(`${player.name}: commence firing on ${enemy.name}`); } }
 function steer(delta: number) { player.waypoint = null; player.course = wrap((player.course ?? player.heading) + delta * DEG); }
 function telegraph(i: number) { player.telegraph = clamp(i, 0, TELEGRAPH.length - 1); }
+function setShell(k: ShellType) {
+  if (k === player.shellType) return;
+  player.setShellType(k);
+  hud.pushLog(`${player.name}: load ${SHELL_LABEL[k]}`);
+}
 function turnToBeam() {
   // put the target on the nearer beam so every turret bears
   const rel = wrap(bearing(player.x, player.z, enemy.x, enemy.z) - player.heading);
@@ -61,6 +67,7 @@ function turnToBeam() {
 document.addEventListener('click', e => {
   const b = (e.target as HTMLElement).closest('button'); if (!b) return;
   if (b.dataset.tel) telegraph(+b.dataset.tel);
+  if (b.dataset.shell) setShell(b.dataset.shell as ShellType);
   const c = b.dataset.cmd;
   if (c === 'port') steer(-10); else if (c === 'stbd') steer(10); else if (c === 'steady') { player.waypoint = null; player.course = player.heading; }
   else if (c === 'target') engage(); else if (c === 'hold') { player.holdFire = !player.holdFire; hud.pushLog(`${player.name}: ${player.holdFire ? 'hold fire' : 'weapons free'}`); }
@@ -90,11 +97,17 @@ document.addEventListener('click', e => {
 });
 ($('returnFire') as HTMLInputElement).addEventListener('change', e => { world.enemyReturnFire = (e.target as HTMLInputElement).checked; if (!world.enemyReturnFire) enemy.fc.assign(null); });
 
+// the fire-control panel is redrawn several times a second, so act on press rather than on click
+document.addEventListener('pointerdown', e => {
+  const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-shell]');
+  if (b) setShell(b.dataset.shell as ShellType);
+});
 window.addEventListener('keydown', e => {
   if ((e.target as HTMLElement).closest('input')) return;
   const k = e.key.toLowerCase();
   if (k === 'w') telegraph(player.telegraph + 1); else if (k === 's') telegraph(player.telegraph - 1);
   else if (k === 'a') steer(-10); else if (k === 'd') steer(10);
+  else if (k === 'f') setShell(player.shellType === 'ap' ? 'he' : 'ap');
   else if (k === 't') engage(); else if (k === 'h') { player.holdFire = !player.holdFire; }
   else if (k === ' ') { e.preventDefault(); paused = !paused; }
 });

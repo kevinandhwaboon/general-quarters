@@ -1,4 +1,5 @@
 import { KN, toReal } from '../config';
+import { ShellType } from '../data/guns';
 import { ShipClass, TurretDef } from '../data/ships';
 import { bearing, clamp, DEG, dir, gauss, wrap } from '../math';
 
@@ -19,6 +20,16 @@ export interface TurretState {
   alive: boolean;
   /** Seconds the turret stays jammed after a non-penetrating hit. */
   jam: number;
+  /** Shell type in the guns now; null when the magazine for the selected type is empty. */
+  loaded: ShellType | null;
+  /** Old-type rounds still in the hoist after a change of shell type; fired before the new type. */
+  hoist: ShellType | null;
+}
+
+/** A secondary mount covers its own side, from 20 degrees off the bow to 20 degrees off the stern. */
+export function mountBears(m: { side: 1 | -1 }, rel: number): boolean {
+  const a = Math.abs(rel) / DEG;
+  return Math.sign(rel) === m.side && a >= 20 && a <= 160;
 }
 
 /** A turret can only bear inside its arc; aft turrets measure from the stern. */
@@ -45,14 +56,18 @@ export class FireControl {
   vx = 0;
   vz = 0;
 
-  constructor(private ship: Ship) {}
+  /** 'main' uses the main-battery director; 'sec' the secondary directors (not damaged separately yet). */
+  constructor(private ship: Ship, private battery: 'main' | 'sec' = 'main') {}
+
+  private get def() { return this.battery === 'main' ? this.ship.c.fc : this.ship.c.sec!.fc; }
+  private get director() { return this.battery === 'main' ? this.ship.director : 1; }
 
   assign(t: Ship | null) {
     this.target = t;
     this.salvos = 0; this.hits = 0; this.straddles = 0; this.last = null;
     if (!t) return;
     const real = toReal(Math.hypot(t.x - this.ship.x, t.z - this.ship.z));
-    const s0 = this.ship.c.fc.rangeErr0 * real / Math.max(0.35, this.ship.director);
+    const s0 = this.def.rangeErr0 * real / Math.max(0.35, this.director);
     this.er = gauss() * s0;
     this.ed = gauss() * s0 * 0.25;
     this.sig = s0;
@@ -63,8 +78,8 @@ export class FireControl {
   spot() {
     const t = this.target; if (!t) return;
     const real = toReal(Math.hypot(t.x - this.ship.x, t.z - this.ship.z));
-    const keep = this.ship.c.fc.spotKeep + (1 - this.ship.director) * 0.3;
-    const floor = 0.0035 * real * (this.ship.radar ? 0.7 : 1) / Math.max(0.35, this.ship.director);
+    const keep = this.def.spotKeep + (1 - this.director) * 0.3;
+    const floor = 0.0035 * real * (this.ship.radar ? 0.7 : 1) / Math.max(0.35, this.director);
     this.er = this.er * keep + gauss() * floor;
     this.ed = this.ed * keep + gauss() * floor * 0.3;
     this.sig = Math.hypot(this.sig * keep, floor);
@@ -97,6 +112,40 @@ export class FireControl {
   }
 }
 
+export type MountKind = 'sec' | 'dp' | 'haa' | 'maa' | 'laa';
+export const MOUNT_LABEL: Record<MountKind, string> = { sec: 'secondary', dp: 'dual-purpose', haa: 'heavy AA', maa: 'medium AA', laa: 'light AA' };
+
+/** A system that can be put out of action by splinters and blast, then repaired by damage control. */
+export interface SystemState {
+  status: 'ok' | 'down' | 'destroyed';
+  /** Seconds until a 'down' system is back in action. */
+  repair: number;
+}
+
+export interface Mount extends SystemState {
+  kind: MountKind;
+  label: string;
+  /** Position along the hull (m from amidships, + forward) and side (+1 starboard, -1 port). */
+  x: number;
+  side: 1 | -1;
+  /** Seconds until a secondary mount can fire again. */
+  reload: number;
+}
+
+export const isSecondary = (m: Mount) => m.kind === 'sec' || m.kind === 'dp';
+export const isAA = (m: Mount) => m.kind !== 'sec';
+
+/** Build the secondary and AA mounts of a class, one per side at each listed position. */
+function buildMounts(c: ShipClass): Mount[] {
+  const out: Mount[] = [];
+  const add = (kind: MountKind, label: string, x: number) => { for (const side of [1, -1] as const) out.push({ kind, label, x, side, status: 'ok', repair: 0, reload: 0 }); };
+  const role = c.secondaryRole ?? 'dp';
+  for (const m of c.secondaries ?? []) add(role, role === 'dp' ? '5-inch mount' : '12.7 cm AA mount', m.x);
+  if (c.cas) for (let i = 0; i < c.cas.n; i++) add('sec', '6-inch casemate', c.cas.x0 + (c.cas.x1 - c.cas.x0) * i / (c.cas.n - 1 || 1));
+  for (const g of c.aa ?? []) for (const x of g.x) add(g.k === 'medium' ? 'maa' : 'laa', g.label, x);
+  return out;
+}
+
 export class Ship {
   readonly c: ShipClass;
   name: string;
@@ -119,10 +168,22 @@ export class Ship {
   engines = 1;
   rudderJam: number | null = null;
   director = 1;
-  radar: boolean;
+  /** Fire-control radar set, or null if none is fitted. */
+  radarSet: SystemState | null;
+  mounts: Mount[];
   turrets: TurretState[];
   fc: FireControl;
+  /** Secondary battery fire control: picks its own target among enemy ships in range. */
+  secFc: FireControl;
+  /** Secondary HE rounds left. */
+  secAmmo: number;
+  /** Seconds the secondaries have waited for slow mounts before firing a partial salvo. */
+  secWait = 0;
   holdFire = false;
+  /** Main-battery shell type ordered by the player. */
+  shellType: ShellType = 'ap';
+  /** Main-battery rounds left in the magazines. */
+  ammo: Record<ShellType, number>;
   salvoWait = 0;
   /** Wake breadcrumbs. */
   hist: { x: number; z: number; h: number; t: number }[] = [];
@@ -133,13 +194,52 @@ export class Ship {
   constructor(c: ShipClass, name: string, side: 'player' | 'enemy', x: number, z: number, headingDeg: number) {
     this.c = c; this.name = name; this.side = side; this.x = x; this.z = z; this.heading = headingDeg * DEG;
     this.hp = c.hp;
-    this.radar = c.nation === 'usn';
-    this.turrets = c.turrets.map(def => ({ def, rel: restAngle(def), reload: 0, alive: true, jam: 0 }));
+    this.radarSet = c.radar ? { status: 'ok', repair: 0 } : null;
+    this.mounts = buildMounts(c);
+    this.ammo = { ...c.ammo };
+    this.turrets = c.turrets.map(def => ({ def, rel: restAngle(def), reload: 0, alive: true, jam: 0, loaded: 'ap' as ShellType, hoist: null }));
     this.fc = new FireControl(this);
+    this.secFc = new FireControl(this, 'sec');
+    this.secAmmo = c.sec?.ammo ?? 0;
     this.course = this.heading;
   }
 
+  /** Radar fitted and working. */
+  get radar() { return this.radarSet?.status === 'ok'; }
+
+  /** Working and total counts for a group of mounts. */
+  mountCount(f: (m: Mount) => boolean) {
+    const ms = this.mounts.filter(f);
+    return { ok: ms.filter(m => m.status === 'ok').length, down: ms.filter(m => m.status === 'down').length, total: ms.length };
+  }
+
   get maxSpeed() { return this.c.maxKn * KN; }
+
+  /**
+   * Order a change of shell type. Each turret still fires the round in its guns and the one already
+   * in the hoist, so the change takes effect after one or two salvos.
+   */
+  setShellType(k: ShellType) {
+    if (k === this.shellType) return;
+    this.shellType = k;
+    for (const tu of this.turrets) {
+      if (tu.loaded === k) tu.hoist = null;
+      else if (tu.loaded) tu.hoist = tu.loaded;
+    }
+  }
+
+  /** Start with every turret loaded with one type (a scenario can load the wrong one). */
+  loadAll(k: ShellType) {
+    this.shellType = k;
+    for (const tu of this.turrets) { tu.loaded = this.ammo[k] > 0 ? k : null; tu.hoist = null; }
+  }
+
+  /** What a turret loads after firing: the hoist round first, then the ordered type if any is left. */
+  reloadTurret(tu: TurretState) {
+    if (tu.hoist && this.ammo[tu.hoist] > 0) { tu.loaded = tu.hoist; tu.hoist = null; return; }
+    tu.hoist = null;
+    tu.loaded = this.ammo[this.shellType] > 0 ? this.shellType : null;
+  }
 
   update(dt: number) {
     if (!this.alive) {

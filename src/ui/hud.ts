@@ -1,10 +1,10 @@
 import { KN, toReal } from '../config';
-import { GunSpec } from '../data/guns';
+import { GunSpec, SHELL_LABEL, ShellType } from '../data/guns';
 import { ShipClass } from '../data/ships';
 import { bearing, clamp, DEG, deg3, hms, interp, km, wrap } from '../math';
 import { Zone, ZONE_LABEL } from '../sim/combat';
 import { hullProfile } from '../sim/hull';
-import { canBear, Ship, TELEGRAPH } from '../sim/ship';
+import { canBear, isAA, isSecondary, Mount, mountBears, Ship, TELEGRAPH } from '../sim/ship';
 import { World } from '../sim/world';
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -69,6 +69,29 @@ export class Hud {
     this.renderAnalysis(s, t);
   }
 
+  /** Radar chip: fitted or not, and how long until a knocked-out set is repaired. */
+  private radarChip(s: Ship) {
+    const r = s.radarSet;
+    if (!r) return '<span class="chip warn">Optical only</span>';
+    if (r.status === 'ok') return '<span class="chip ok">FC radar</span>';
+    if (r.status === 'down') return `<span class="chip bad" title="Damage control is repairing it; optical fire control until then">Radar down ${Math.ceil(r.repair)} s</span>`;
+    return '<span class="chip bad">Radar destroyed</span>';
+  }
+
+  /** Chip for a group of mounts: working of total, with how many are being repaired. */
+  private mountChip(s: Ship, label: string, f: (m: Mount) => boolean, title: string) {
+    const n = s.mountCount(f);
+    if (!n.total) return '';
+    const cls = n.ok === n.total ? 'ok' : n.ok >= n.total * 0.6 ? 'warn' : 'bad';
+    return `<span class="chip ${cls}" title="${title}">${label} ${n.ok}/${n.total}${n.down ? ` · ${n.down} repairing` : ''}</span>`;
+  }
+
+  private systemsHtml(s: Ship) {
+    return this.radarChip(s)
+      + this.mountChip(s, 'Secondary', isSecondary, 'Secondary mounts working (both sides). They will engage ships in range on their own.')
+      + this.mountChip(s, 'AA', isAA, 'AA mounts working (heavy, medium and light). They will engage aircraft in range on their own.');
+  }
+
   private renderOwn(s: Ship) {
     const f = s.hp / s.c.hp, pct = Math.round(clamp(f, 0, 1) * 100);
     const chip = (txt: string, cls: string) => `<span class="chip ${cls}">${txt}</span>`;
@@ -81,20 +104,59 @@ export class Hud {
         <dt>Rudder</dt><dd class="${s.rudderJam !== null ? 'bad' : ''}">${s.rudderJam !== null ? 'JAMMED ' : ''}${Math.round(Math.abs(s.rudder) * 35)}° ${s.rudder > 0.02 ? 'stbd' : s.rudder < -0.02 ? 'port' : ''}</dd>
         <dt>Turn rate</dt><dd class="${Math.abs(s.turnRate) / DEG > 0.4 ? 'warn' : ''}">${(s.turnRate / DEG).toFixed(2)}°/s</dd>
       </dl>
-      <div class="chips">${tur}${chip('Director ' + Math.round(s.director * 100) + '%', s.director > 0.8 ? 'ok' : s.director > 0.4 ? 'warn' : 'bad')}${chip(s.radar ? 'FC radar' : 'Optical only', s.radar ? 'ok' : 'warn')}${chip('Engines ' + Math.round(s.engines * 100) + '%', s.engines > 0.8 ? 'ok' : s.engines > 0.5 ? 'warn' : 'bad')}${chip('Fires ' + s.fires, s.fires ? 'bad' : 'ok')}${chip('Flooding ' + s.flooding, s.flooding ? 'bad' : 'ok')}</div>`;
+      <div class="chips">${tur}${chip('Director ' + Math.round(s.director * 100) + '%', s.director > 0.8 ? 'ok' : s.director > 0.4 ? 'warn' : 'bad')}${this.systemsHtml(s)}${chip('Engines ' + Math.round(s.engines * 100) + '%', s.engines > 0.8 ? 'ok' : s.engines > 0.5 ? 'warn' : 'bad')}${chip('Fires ' + s.fires, s.fires ? 'bad' : 'ok')}${chip('Flooding ' + s.flooding, s.flooding ? 'bad' : 'ok')}</div>`;
+  }
+
+  /** Shell selector with rounds left; the button for the ordered type is lit. */
+  private ammoHtml(s: Ship) {
+    const types: ShellType[] = ['ap', 'he'];
+    const desc: Record<ShellType, string> = { ap: 'armour-piercing: for armoured targets', he: 'high explosive: superstructure, fires, light ships' };
+    const btns = types.map(k => {
+      const n = s.ammo[k], full = s.c.ammo[k];
+      const cls = n === 0 ? 'bad' : n < full * 0.2 ? 'warn' : '';
+      return `<button class="cmd${s.shellType === k ? ' on' : ''}" data-shell="${k}" title="${desc[k]}"><span>${SHELL_LABEL[k]}</span><span class="n ${cls}">${n}/${full}</span></button>`;
+    }).join('');
+    const changing = s.turrets.some(tu => tu.alive && (tu.hoist || (tu.loaded && tu.loaded !== s.shellType)));
+    const empty = s.ammo[s.shellType] === 0;
+    return `<div class="ammo">${btns}</div>
+      ${empty ? `<div class="tip">${SHELL_LABEL[s.shellType]} magazines are empty. Change shell type to keep firing.</div>`
+        : changing ? `<div class="note">Changing to ${SHELL_LABEL[s.shellType]}: turrets fire the rounds already loaded and in the hoists first.</div>` : ''}`;
+  }
+
+  /** Secondary battery: engages the nearest enemy ship in range on its own. */
+  private secHtml(s: Ship) {
+    const sec = s.c.sec; if (!sec) return '';
+    const fc = s.secFc, t = fc.target;
+    const n = s.mountCount(isSecondary);
+    let state: string;
+    if (s.secAmmo <= 0) state = '<span class="bad">out of ammunition</span>';
+    else if (s.holdFire) state = '<span class="warn">holding fire</span>';
+    else if (!t) state = `no enemy within ${sec.gun.maxRangeKm.toFixed(1)} km`;
+    else {
+      const rel = wrap(bearing(s.x, s.z, t.x, t.z) - s.heading);
+      const bears = s.mounts.filter(m => isSecondary(m) && m.status === 'ok' && mountBears(m, rel)).length;
+      state = `engaging ${t.name} at ${km(toReal(Math.hypot(t.x - s.x, t.z - s.z)))} · <span class="${bears ? '' : 'warn'}">${bears} mount${bears === 1 ? '' : 's'} bearing</span>`;
+    }
+    const last = t && fc.last ? ` · last salvo ${fc.last.text}` : '';
+    return `<div class="sub">Secondaries · ${sec.gun.name}, HE</div>
+      <div class="note">${state}${last}</div>
+      <dl class="stats"><dt>Mounts working</dt><dd>${n.ok} of ${n.total}${n.down ? ` · ${n.down} repairing` : ''}</dd>
+        <dt>Rounds</dt><dd class="${s.secAmmo < sec.ammo * 0.2 ? 'warn' : ''}">${s.secAmmo} / ${sec.ammo}</dd>
+        <dt>Salvos · hits</dt><dd>${fc.salvos} · ${fc.hits}</dd></dl>`;
   }
 
   private renderFc(s: Ship, est: Estimate) {
     const fc = s.fc, t = fc.target;
-    if (!t || !t.alive) { $('fc').innerHTML = `<div class="note">${t && !t.alive ? 'Target destroyed. ' : ''}No target. Click the enemy ship or press <b>T</b> to engage.</div>`; return; }
+    if (!t || !t.alive) { $('fc').innerHTML = `${this.ammoHtml(s)}<div class="note">${t && !t.alive ? 'Target destroyed. ' : ''}No target. Click the enemy ship or press <b>T</b> to engage. <b>F</b> changes shell type.</div>${this.secHtml(s)}`; return; }
     const d = Math.hypot(t.x - s.x, t.z - s.z), real = toReal(d);
     const q = fc.quality();
     const rows = s.turrets.map((tu, i) => {
       const rel = wrap(bearing(s.x, s.z, t.x, t.z) - s.heading);
       const bears = canBear(tu.def, rel);
-      const st = !tu.alive ? '<span class="bad">destroyed</span>' : tu.jam > 0 ? `<span class="warn">jammed ${Math.ceil(tu.jam)} s</span>` : !bears ? '<span class="warn">masked</span>' : tu.reload > 0 ? `loading ${Math.ceil(tu.reload)} s` : '<span class="ok">ready</span>';
+      const st = !tu.alive ? '<span class="bad">destroyed</span>' : !tu.loaded ? '<span class="bad">no rounds</span>' : tu.jam > 0 ? `<span class="warn">jammed ${Math.ceil(tu.jam)} s</span>` : !bears ? '<span class="warn">masked</span>' : tu.reload > 0 ? `loading ${Math.ceil(tu.reload)} s` : '<span class="ok">ready</span>';
       const fill = tu.alive ? 1 - tu.reload / s.c.gun.reload : 0;
-      return `<div class="tur"><span>Turret ${i + 1}</span><div class="rl"><i style="width:${Math.round(clamp(fill, 0, 1) * 100)}%"></i></div><span class="st">${st}</span></div>`;
+      const ld = tu.alive && tu.loaded ? `<span class="ld${tu.loaded !== s.shellType ? ' warn' : ''}" title="loaded${tu.hoist ? `; ${SHELL_LABEL[tu.hoist]} still in the hoist` : ''}">${SHELL_LABEL[tu.loaded]}${tu.hoist ? '+' : ''}</span>` : '<span class="ld">—</span>';
+      return `<div class="tur"><span>Turret ${i + 1}</span><div class="rl"><i style="width:${Math.round(clamp(fill, 0, 1) * 100)}%"></i></div>${ld}<span class="st">${st}</span></div>`;
     }).join('');
     const lastCls = fc.last ? (fc.last.kind === 'hit' ? 'bad' : fc.last.kind === 'straddle' ? 'warn' : '') : '';
     let zoneHtml = '';
@@ -104,7 +166,7 @@ export class Hud {
         <div class="legend">${entries.map(([z, n]) => `<span style="--c:${ZONE_COLOUR[z]}">${ZONE_LABEL[z]} ${Math.round(n / est.hits * 100)}%</span>`).join('')}</div>`;
     }
     const turning = Math.abs(s.turnRate) / DEG > 0.4;
-    $('fc').innerHTML = `<dl class="stats">
+    $('fc').innerHTML = `${this.ammoHtml(s)}<dl class="stats">
         <dt>Target</dt><dd>${t.name}</dd>
         <dt>Range</dt><dd>${km(real)}</dd>
         <dt>Guns bearing</dt><dd class="${est && est.guns < est.total ? 'warn' : ''}">${est ? `${est.guns} of ${est.total}` : '—'}</dd>
@@ -115,9 +177,10 @@ export class Hud {
         <dt>Salvos · straddles · hits</dt><dd>${fc.salvos} · ${fc.straddles} · ${fc.hits}</dd>
         <dt>Hit chance per shell</dt><dd class="warn">${est ? (est.pHit * 100).toFixed(1) + '%' : '—'}</dd>
         <dt>Expected hits per salvo</dt><dd>${est ? (est.pHit * est.guns).toFixed(2) : '—'}</dd>
-        <dt>…that penetrate</dt><dd>${est ? (est.pPen * est.guns).toFixed(2) : '—'}</dd></dl>
+        <dt>…that ${s.shellType === 'he' ? 'burst inside' : 'penetrate'}</dt><dd>${est ? (est.pPen * est.guns).toFixed(2) : '—'}</dd></dl>
       ${zoneHtml}
       <div class="turrets">${rows}</div>
+      ${this.secHtml(s)}
       ${turning ? '<div class="tip">You are turning. The director loses its solution while the ship swings; steady up before the next salvo.</div>' : ''}`;
   }
 
@@ -136,11 +199,13 @@ export class Hud {
     const eres = (eff: number, obl: number) => obl > 65 * DEG ? '<span class="pill amb">ricochet</span>' : epen >= eff ? '<span class="pill red">penetrated</span>' : '<span class="pill grn">holds</span>';
     const myZone = immuneZone(s.c, eg, myAspect), theirZone = immuneZone(t.c, g, aspect);
     const zt = (z: [number, number] | null) => (z ? `${z[0].toFixed(1)}–${z[1].toFixed(1)} km` : 'none');
-    $('tgtHead').innerHTML = `<h2>${t.name}</h2><div class="cls">${t.c.label} · ${t.alive ? (t.speed / KN).toFixed(0) + ' kn' : 'sinking'}</div>`;
+    $('tgtHead').innerHTML = `<h2>${t.name}</h2><div class="cls">${t.c.label} · ${t.alive ? (t.speed / KN).toFixed(0) + ' kn' : 'sinking'}</div>
+      <div class="chips">${this.systemsHtml(t)}<span class="chip ${t.director > 0.8 ? 'ok' : t.director > 0.4 ? 'warn' : 'bad'}">Director ${Math.round(t.director * 100)}%</span></div>`;
     $('tgtCalc').innerHTML = `<table class="calc">
       <tr><td>Target aspect</td><td>${a}° · ${word}</td></tr>
       <tr><td>Angle of fall at ${km(realKm * 1000)}</td><td>${(fall / DEG).toFixed(1)}°</td></tr>
       <tr><td>Our AP penetration (normal)</td><td>${Math.round(pen)} mm</td></tr>
+      <tr><td>Our HE (${g.he.name}) bursts behind</td><td>up to ${g.he.penMm} mm</td></tr>
       <tr><td>Their belt ${t.c.armour.belt} mm → effective</td><td>${Math.round(b.eff)} mm ${res(b.eff, b.obl)}</td></tr>
       <tr><td>Their deck ${t.c.armour.deck} mm → effective</td><td>${Math.round(dk.eff)} mm ${res(dk.eff, dk.obl)}</td></tr>
       <tr class="sub"><td colspan="2">Your exposure to their ${eg.name}</td></tr>

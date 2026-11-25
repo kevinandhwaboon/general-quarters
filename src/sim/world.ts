@@ -1,7 +1,8 @@
 import { FLIGHT_TIME_SCALE, toReal } from '../config';
+import { GunSpec, SHELL_LABEL, ShellType } from '../data/guns';
 import { bearing, clamp, DEG, dir, gauss, interp, rnd, wrap } from '../math';
 import { hitTest, HitResult, Impact, OUTCOME_LABEL, resolveHit, Zone, ZONE_LABEL } from './combat';
-import { canBear, restAngle, Ship } from './ship';
+import { canBear, FireControl, Mount, mountBears, restAngle, Ship } from './ship';
 
 export interface Shell {
   id: number;
@@ -18,13 +19,17 @@ export interface Shell {
   t: number;
   T: number;
   apex: number;
+  /** Main-battery turret index, or -1 for a secondary mount. */
   turret: number;
+  kind: ShellType;
+  gun: GunSpec;
 }
 
-interface Salvo { id: number; shooter: Ship; target: Ship; left: number; along: number[]; hits: number; straddle: boolean; }
+interface Salvo { id: number; shooter: Ship; fc: FireControl; target: Ship; left: number; along: number[]; hits: number; straddle: boolean; }
 
 export type SimEvent =
-  | { type: 'fire'; ship: Ship; turret: number }
+  | { type: 'fire'; ship: Ship; turret: number; guns: number; kind: ShellType }
+  | { type: 'secFire'; ship: Ship; mount: Mount; guns: number }
   | { type: 'splash'; shell: Shell; x: number; z: number }
   | { type: 'hit'; shell: Shell; result: HitResult }
   | { type: 'log'; text: string; cls: '' | 'hit' | 'crit' | 'own' }
@@ -54,7 +59,7 @@ export class World {
       s.update(dt);
       if (this.time - s.histT >= 2.5) { s.hist.unshift({ x: s.x, z: s.z, h: s.heading, t: this.time }); s.histT = this.time; if (s.hist.length > 44) s.hist.pop(); }
       this.damageControl(s, dt);
-      if (s.alive) { s.fc.update(dt); this.gunnery(s, dt); }
+      if (s.alive) { s.fc.update(dt); this.gunnery(s, dt); this.secondaryGunnery(s, dt); }
     }
     for (let i = this.shells.length - 1; i >= 0; i--) {
       const sh = this.shells[i];
@@ -80,6 +85,16 @@ export class World {
     if (s.fires > 0) { s.hp -= 0.04 * s.fires * dt; if (Math.random() < 0.012 * s.fires * dt) s.fires--; }
     if (s.flooding > 0) { s.hp -= 0.035 * s.flooding * dt; if (Math.random() < 0.004 * dt) s.flooding--; }
     for (const t of s.turrets) if (t.jam > 0) t.jam = Math.max(0, t.jam - dt);
+    // damage control brings knocked-out systems back
+    if (s.alive) {
+      for (const sys of [s.radarSet, ...s.mounts]) {
+        if (!sys || sys.status !== 'down') continue;
+        sys.repair -= dt;
+        if (sys.repair > 0) continue;
+        sys.status = 'ok'; sys.repair = 0;
+        if (sys === s.radarSet) this.log(`${s.name}: radar back in action`, s.side === 'player' ? 'own' : '');
+      }
+    }
     if (s.alive && s.hp <= 0) {
       s.alive = false; s.hp = 0;
       this.log(`${s.name} is sinking`, 'crit');
@@ -87,14 +102,72 @@ export class World {
   }
 
   /** Where the director aims: predicted target position plus the solution error. */
-  aimPoint(s: Ship, t: Ship) {
+  aimPoint(s: Ship, t: Ship, fc: FireControl = s.fc, gun: GunSpec = s.c.gun) {
     const d = Math.hypot(t.x - s.x, t.z - s.z);
     const realKm = toReal(d) / 1000;
-    const T = interp(s.c.gun.flightS, realKm) * FLIGHT_TIME_SCALE;
-    const px = t.x + s.fc.vx * T, pz = t.z + s.fc.vz * T;
+    const T = interp(gun.flightS, realKm) * FLIGHT_TIME_SCALE;
+    const px = t.x + fc.vx * T, pz = t.z + fc.vz * T;
     const b = bearing(s.x, s.z, px, pz);
     const [ux, uz] = dir(b), [rx, rz] = dir(b + Math.PI / 2);
-    return { x: px + ux * s.fc.er + rx * s.fc.ed, z: pz + uz * s.fc.er + rz * s.fc.ed, b, T, realKm, ux, uz, rx, rz };
+    return { x: px + ux * fc.er + rx * fc.ed, z: pz + uz * fc.er + rz * fc.ed, b, T, realKm, ux, uz, rx, rz };
+  }
+
+  /** Nearest living enemy ship within the secondary guns' range (real km), or null. */
+  secondaryTarget(s: Ship): Ship | null {
+    const sec = s.c.sec; if (!sec) return null;
+    let best: Ship | null = null, bd = Infinity;
+    for (const o of this.ships) {
+      if (o.side === s.side || !o.alive) continue;
+      const d = toReal(Math.hypot(o.x - s.x, o.z - s.z)) / 1000;
+      if (d <= sec.gun.maxRangeKm && d < bd) { bd = d; best = o; }
+    }
+    return best;
+  }
+
+  /**
+   * Secondaries engage on their own: the nearest enemy ship in range, with HE, from the mounts on
+   * the engaged side. They respect hold fire and fire in salvos so the fall of shot can be spotted.
+   */
+  private secondaryGunnery(s: Ship, dt: number) {
+    const sec = s.c.sec; if (!sec) return;
+    for (const m of s.mounts) m.reload = Math.max(0, m.reload - dt);
+    const t = s.holdFire || s.secAmmo <= 0 ? null : this.secondaryTarget(s);
+    if (t !== s.secFc.target) s.secFc.assign(t);
+    if (!t) { s.secWait = 0; return; }
+    s.secFc.update(dt);
+    const aim = this.aimPoint(s, t, s.secFc, sec.gun);
+    const rel = wrap(aim.b - s.heading);
+    const bearingMounts = s.mounts.filter(m => (m.kind === 'sec' || m.kind === 'dp') && m.status === 'ok' && mountBears(m, rel));
+    const ready = bearingMounts.filter(m => m.reload <= 0);
+    if (ready.length === 0) { s.secWait = 0; return; }
+    s.secWait += dt;
+    if (ready.length < bearingMounts.length && s.secWait < 2) return;
+    s.secWait = 0;
+    const g = sec.gun, real = aim.realKm * 1000, fall = interp(g.fallDeg, aim.realKm) * DEG;
+    const id = this.nextSalvo++;
+    const [fx, fz] = dir(s.heading), [rx, rz] = [-fz, fx];
+    const jr = gauss() * 0.005 * real, jd = gauss() * 0.0015 * real;
+    let n = 0;
+    for (const m of ready) {
+      const guns = Math.min(sec.gunsPerMount, s.secAmmo);
+      if (guns <= 0) break;
+      s.secAmmo -= guns;
+      m.reload = g.reload * rnd(0.9, 1.15);
+      const off = s.c.B / 2 * m.side;
+      const mx = s.x + fx * m.x + rx * off, mz = s.z + fz * m.x + rz * off;
+      for (let k = 0; k < guns; k++) {
+        const ea = jr + gauss() * g.dispRange * real, ed = jd + gauss() * g.dispDeflection * real;
+        const lx = aim.x + aim.ux * ea + aim.rx * ed, lz = aim.z + aim.uz * ea + aim.rz * ed;
+        const [dx, dz] = dir(bearing(mx, mz, lx, lz));
+        this.shells.push({ id: this.nextShell++, salvo: id, shooter: s, target: t, x0: mx, y0: s.c.fb + 3, z0: mz, lx, lz, dx, dz, fall, realKm: aim.realKm,
+          t: 0, T: aim.T * rnd(0.98, 1.02), apex: Math.hypot(lx - mx, lz - mz) * Math.tan(fall) * 0.35 + 30, turret: -1, kind: 'he', gun: g });
+        n++;
+      }
+      this.events.push({ type: 'secFire', ship: s, mount: m, guns });
+    }
+    if (n === 0) return;
+    s.secFc.salvos++;
+    this.salvos.set(id, { id, shooter: s, fc: s.secFc, target: t, left: n, along: [], hits: 0, straddle: false });
   }
 
   private gunnery(s: Ship, dt: number) {
@@ -106,6 +179,8 @@ export class World {
     s.turrets.forEach((tu, i) => {
       tu.reload = Math.max(0, tu.reload - dt);
       if (!tu.alive) return;
+      // an empty turret loads as soon as rounds of the ordered type are available
+      if (!tu.loaded) { s.reloadTurret(tu); if (tu.loaded) tu.reload = Math.max(tu.reload, g.reload); }
       const relT = aim ? wrap(aim.b - s.heading) : null;
       const bears = relT !== null && canBear(tu.def, relT);
       const want = bears && relT !== null ? relT : restAngle(tu.def);
@@ -117,7 +192,7 @@ export class World {
       tu.rel = tu.def.fwd ? next : wrap(next + Math.PI);
       if (bears && inRange) {
         bearingCount++;
-        if (Math.abs(goal - next) < 1.2 * DEG && tu.reload <= 0 && tu.jam <= 0) ready.push(i);
+        if (Math.abs(goal - next) < 1.2 * DEG && tu.reload <= 0 && tu.jam <= 0 && tu.loaded) ready.push(i);
       }
     });
     if (!t || !aim || !inRange || s.holdFire || ready.length === 0) { s.salvoWait = 0; return; }
@@ -139,20 +214,26 @@ export class World {
     const jr = gauss() * 0.004 * real, jd = gauss() * 0.001 * real;
     for (const i of turrets) {
       const tu = s.turrets[i];
+      const kind = tu.loaded!;
+      const guns = Math.min(tu.def.guns, s.ammo[kind]);
+      if (guns <= 0) { tu.loaded = null; continue; }
+      s.ammo[kind] -= guns;
       tu.reload = g.reload * rnd(0.95, 1.08);
+      s.reloadTurret(tu);
       const mx = s.x + fx * tu.def.x, mz = s.z + fz * tu.def.x;
-      for (let k = 0; k < tu.def.guns; k++) {
+      for (let k = 0; k < guns; k++) {
         const ea = jr + gauss() * g.dispRange * real, ed = jd + gauss() * g.dispDeflection * real;
         const lx = aim.x + aim.ux * ea + aim.rx * ed, lz = aim.z + aim.uz * ea + aim.rz * ed;
         const b = bearing(mx, mz, lx, lz), [dx, dz] = dir(b);
         this.shells.push({ id: this.nextShell++, salvo: id, shooter: s, target: t, x0: mx, y0: tu.def.h + 2, z0: mz, lx, lz, dx, dz, fall, realKm: aim.realKm,
-          t: 0, T: aim.T * rnd(0.98, 1.02), apex: Math.hypot(lx - mx, lz - mz) * Math.tan(fall) * 0.35 + 60, turret: i });
+          t: 0, T: aim.T * rnd(0.98, 1.02), apex: Math.hypot(lx - mx, lz - mz) * Math.tan(fall) * 0.35 + 60, turret: i, kind, gun: g });
         n++;
       }
-      this.events.push({ type: 'fire', ship: s, turret: i });
+      this.events.push({ type: 'fire', ship: s, turret: i, guns, kind });
     }
+    if (n === 0) return;
     s.fc.salvos++;
-    this.salvos.set(id, { id, shooter: s, target: t, left: n, along: [], hits: 0, straddle: false });
+    this.salvos.set(id, { id, shooter: s, fc: s.fc, target: t, left: n, along: [], hits: 0, straddle: false });
   }
 
   private land(sh: Shell) {
@@ -160,12 +241,16 @@ export class World {
     const imp: Impact | null = t.alive || t.sinkT < 30 ? hitTest(t, sh.lx, sh.lz, sh.dx, sh.dz, sh.fall) : null;
     const sv = this.salvos.get(sh.salvo);
     if (imp) {
-      const res = resolveHit(t, imp, sh.shooter.c.gun, sh.realKm);
+      const res = resolveHit(t, imp, sh.gun, sh.realKm, sh.kind);
       this.events.push({ type: 'hit', shell: sh, result: res });
       if (sv) sv.hits++;
       const who = sh.shooter.side === 'player' ? 'hit' : 'crit';
-      const text = `${sh.shooter.name.replace('USS ', '')} → ${t.name.replace('USS ', '')}: ${ZONE_LABEL[imp.zone as Zone]} · ${OUTCOME_LABEL[res.outcome]}${res.notes.length ? ' · ' + res.notes.join(', ') : ''}`;
-      this.log(text, res.critical ? 'crit' : who === 'hit' ? 'hit' : '');
+      // secondary hits are frequent and small: log only those that do something
+      if (sh.turret >= 0 || res.notes.length) {
+        const gun = sh.turret >= 0 ? SHELL_LABEL[sh.kind] : `${Math.round(sh.gun.caliberMm / 25.4)}-inch`;
+        const text = `${sh.shooter.name.replace('USS ', '')} → ${t.name.replace('USS ', '')}: ${gun} · ${ZONE_LABEL[imp.zone as Zone]} · ${OUTCOME_LABEL[res.outcome]}${res.notes.length ? ' · ' + res.notes.join(', ') : ''}`;
+        this.log(text, res.critical ? 'crit' : who === 'hit' ? 'hit' : '');
+      }
       if (res.magazine && t.alive) { t.magazine = true; t.hp = 0; this.events.push({ type: 'magazine', ship: t }); }
       if (t.alive && t.hp <= 0) { t.alive = false; t.hp = 0; this.log(`${t.name} ${t.magazine ? 'has blown up' : 'is sinking'}`, 'crit'); }
     } else {
@@ -181,7 +266,7 @@ export class World {
 
   private salvoDone(sv: Salvo) {
     this.salvos.delete(sv.id);
-    const s = sv.shooter, fc = s.fc;
+    const fc = sv.fc;
     if (fc.target !== sv.target) return;
     const half = sv.target.c.B / 2 + 20;
     const over = sv.along.filter(a => a > half).length, short = sv.along.filter(a => a < -half).length;
@@ -216,11 +301,12 @@ export class World {
       const imp = hitTest(t, px - t.vxPred(aim.T), pz - t.vzPred(aim.T), aim.ux, aim.uz, fall, 3);
       if (imp) {
         hits++; zones[imp.zone] = (zones[imp.zone] ?? 0) + 1;
-        const pen = interp(g.penNormal, aim.realKm);
-        if (pen >= imp.plate / Math.max(Math.cos(imp.obliquity), 0.05) && imp.obliquity < 65 * DEG) pens++;
+        const eff = imp.plate / Math.max(Math.cos(imp.obliquity), 0.05);
+        // AP: defeats the plate without glancing off. HE: blows through and bursts inside.
+        if (s.shellType === 'he' ? eff <= g.he.penMm : interp(g.penNormal, aim.realKm) >= eff && imp.obliquity < 65 * DEG) pens++;
       }
     }
-    const guns = s.turrets.reduce((a, tu) => a + (tu.alive && canBear(tu.def, wrap(aim.b - s.heading)) ? tu.def.guns : 0), 0);
+    const guns = s.turrets.reduce((a, tu) => a + (tu.alive && tu.loaded && canBear(tu.def, wrap(aim.b - s.heading)) ? Math.min(tu.def.guns, s.ammo[tu.loaded]) : 0), 0);
     const total = s.turrets.reduce((a, tu) => a + tu.def.guns, 0);
     return { pHit: hits / samples, pPen: pens / samples, zones, hits, guns, total, aim, fall };
   }
