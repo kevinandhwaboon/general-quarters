@@ -56,6 +56,29 @@ See `README.md` for file pointers.
 - **UI feedback**: hit chance per shell (Monte Carlo estimate), expected hits per salvo, where hits would land (zone breakdown), solution error, last salvo (over, short, straddle, hits), turret states, effective armour against penetration, and immune zones for both sides.
 - **Balance** (`scripts/balance.ts`): about 17% per shell against a stationary target at about 18 km; Kirishima sinks in about 9 minutes of game time. HE knocks out about three times as many of Kirishima's 28 mounts as AP (about 8 destroyed per fight against 2). With HE against Kirishima: no citadel hits, sinks in about half of 30-minute trials against a stationary target, mostly from fires, using most of the 360 HE rounds. Close duel at about 12 km with both sides firing: Washington's 5-inch guns score about 44 hits on Kirishima (historically roughly 40 on 14–15 Nov 1942) and leave about 10 of her 28 mounts out of action; Kirishima's casemates score about 9. 5-inch hit rates of about 10% at 12–15 km may be high; check when there are smaller targets. Known issue: hit rates against moving or zig-zagging targets come out *higher* than against a stationary one, because the moving target closes the range. Needs retuning.
 
+### Destroyers against battleships (research, for roadmap item 3)
+
+Historical outcome: a lone destroyer charging an alert battleship in **clear daylight** was usually sunk or crippled, firing its torpedoes from too far out or missing. Destroyers were deadly **at night, in smoke or squalls, in coordinated flotilla attacks, or while the battleship was busy** with other ships.
+
+| Situation | Typical result |
+|---|---|
+| Lone destroyer, clear daylight, alert battleship | Destroyer sunk or crippled; torpedoes fired too far out or miss |
+| Daylight with smoke, squalls or a distracted battleship (Samar 1944; Acasta and Ardent against Scharnhorst, 1940) | Destroyers mostly sunk but sometimes score (Acasta hit Scharnhorst) |
+| Night, no or poor radar (Guadalcanal, 13 Nov 1942) | Close-range melee where destroyers matter on both sides |
+| Night, attackers with good radar (Surigao Strait 1944) | Destroyers decisive: their torpedoes sank Fuso and hit Yamashiro |
+| Night harassment of an alert battleship (Vian against Bismarck, May 1941) | Both sides fire all night and nobody hits much |
+
+Compared with World of Warships:
+
+- **Realistic:** main batteries are poor against a fast, manoeuvring destroyer. A 16-inch shell flies 35–40 s at 20 km, enough for a destroyer at 35 kn to move about 650 m and change course, and spread along the line of fire is hundreds of metres. Turrets traverse at roughly 2–4°/s and have depression limits, so a destroyer very close can get inside them (Laffey and Hiei, 13 Nov 1942). Battleship AP often passes through a destroyer without arming (Johnston and Hoel at Samar; Hoel took over 40 hits). The threat of torpedoes changes fleet movement even without hits (Yamato turned away at Samar and lost contact).
+- **Not realistic:** daylight concealment (a destroyer is visible from a battleship's spotting top out to about the horizon, roughly 25 km, plus radar later); weak secondaries (the real anti-destroyer weapon: Washington's twenty 5-inch/38 at 15–20 rounds per minute each under radar-equipped Mk 37 directors, where one hit in the machinery can stop a destroyer); shortened, accurate torpedoes (US Mk 15 about 5.5 km at 45 kn or 13.7 km at 26.5 kn; Japanese Type 93 about 20 km at 48–50 kn or 40 km at 36 kn, almost wakeless). Long-range spreads rarely hit an alert ship that combs the tracks: on 14–15 Nov 1942 many Long Lances fired at Washington and South Dakota all missed, though three of the four screening US destroyers were sunk or fatally damaged. A hit-point pool also misrepresents destroyers: some soaked up many hits that passed through, while one shell in a boiler room stopped another.
+
+Implications for the game:
+
+- Already emerges from existing systems: smoothed target-motion estimates make a zigzagging destroyer hard for main guns; automatic secondaries (Mk 37 versus Kongō's casemates) are the counter; AP over-penetration through thin plating (`fuseThreshold`) makes switching to HE the right call.
+- To add with destroyers: **turret traverse rate and depression limits**; **torpedoes at true range and speed** (through `toGame()` and the flight-time scale), with hit chance coming from spread geometry and target manoeuvre, not a flat roll; **track visibility** (steam torpedoes leave a wake, oxygen ones barely do); **combing**, and AI that turns away from a spread.
+- In clear daylight with full visibility, destroyers will mostly just die. That is realistic but hides their purpose, so at least smoke and basic night detection should arrive with them (see open questions).
+
 ## 5. Art direction (approved in mockups)
 
 - Real-time 3D with a fixed orthographic camera (56° pitch, north up), giving an RA2-like look.
@@ -100,3 +123,4 @@ Alongside: unit tests for the simulation, a seeded random-number generator for r
 
 - When to schedule shell types, finite ammunition, system damage, and automatic secondary and AA fire (likely alongside squadrons, before torpedoes; AA needs aircraft first).
 - Sources for per-class magazine loadouts (rounds per gun by shell type).
+- Whether to move smoke and basic night detection (roadmap item 4) up alongside torpedoes and destroyers (item 3), since destroyers show their real role only at night or behind smoke and the first scenario is a night action.
