@@ -42,11 +42,19 @@ export function immuneZone(c: ShipClass, gun: GunSpec, aspect: number): [number,
   return lo === null || hi === null ? null : [lo, hi];
 }
 
+/** What the HUD reads from the game: the player's ships, the selection, the ship the panels show and its target. */
+export interface HudSource {
+  fleet: () => Ship[];
+  selection: () => Ship[];
+  primary: () => Ship;
+  target: () => Ship | null;
+}
+
 export class Hud {
   private logLines: { t: number; text: string; cls: string }[] = [];
   private actx: CanvasRenderingContext2D;
   estimate: Estimate = null;
-  constructor(private world: World, private getPlayer: () => Ship, private getEnemy: () => Ship) {
+  constructor(private world: World, private src: HudSource) {
     this.actx = ($('aspect') as HTMLCanvasElement).getContext('2d')!;
     $('telegraph').innerHTML = TELEGRAPH.map((t, i) => `<button class="cmd" data-tel="${i}">${t.key}</button>`).join('');
   }
@@ -60,13 +68,29 @@ export class Hud {
   render() {
     $('clock').textContent = hms(this.world.time);
     $('log').innerHTML = this.logLines.map(l => `<div class="ln ${l.cls}"><span class="t">${hms(l.t)}</span>${l.text}</div>`).join('');
-    const s = this.getPlayer(), t = this.getEnemy();
+    const s = this.src.primary(), t = this.src.target(), sel = this.src.selection().filter(o => o.alive);
+    this.renderFleet(this.src.fleet(), sel, s);
     this.renderOwn(s);
     document.querySelectorAll<HTMLButtonElement>('[data-tel]').forEach(b => b.classList.toggle('on', +b.dataset.tel! === s.telegraph));
-    document.querySelector('[data-cmd="hold"]')!.classList.toggle('on', s.holdFire);
-    document.querySelector('[data-cmd="target"]')!.classList.toggle('on', s.fc.target === t);
+    document.querySelector('[data-cmd="hold"]')!.classList.toggle('on', sel.length > 0 && sel.every(o => o.holdFire));
+    document.querySelector('[data-cmd="target"]')!.classList.toggle('on', !!s.fc.target?.alive);
     this.renderFc(s, this.estimate);
     this.renderAnalysis(s, t);
+  }
+
+  /** Squadron list: every player ship, its state and whether it is selected. Rows select on press. */
+  private renderFleet(fleet: Ship[], sel: Ship[], primary: Ship) {
+    const rows = fleet.map((s, i) => {
+      const f = clamp(s.hp / s.c.hp, 0, 1), col = f > 0.6 ? css('--good') : f > 0.3 ? css('--accent') : css('--foe');
+      const tgt = s.fc.target && s.fc.target.alive ? `→ ${s.fc.target.name}` : 'no target';
+      const st = !s.alive ? (s.magazine ? 'blown up' : 'sinking') : `${(s.speed / KN).toFixed(0)} kn · ${s.holdFire ? '<span class="warn">hold fire</span>' : tgt}`;
+      const cls = `unit${sel.includes(s) ? ' on' : ''}${s === primary && sel.length > 1 ? ' pri' : ''}${s.alive ? '' : ' dead'}`;
+      return `<button class="${cls}" data-pick="${i}"${s.alive ? '' : ' disabled'} title="${s.c.label}"><kbd>${i + 1}</kbd><span class="nm">${s.name.replace(/^USS /, '')}</span><span class="hpb"><i style="width:${Math.round(f * 100)}%;background:${col}"></i></span><span class="st">${st}</span></button>`;
+    }).join('');
+    const note = sel.length > 1
+      ? `<b>${sel.length} ships selected.</b> Orders go to all of them; the panels below show <b>${primary.name}</b>.`
+      : 'Click a ship or press its number to select it. <b>Shift</b> adds or removes, <b>Q</b> selects all, or drag a box on the map.';
+    $('fleet').innerHTML = `<div class="units">${rows}</div><div class="note">${note}</div>`;
   }
 
   /** Radar chip: fitted or not, and how long until a knocked-out set is repaired. */
@@ -184,8 +208,8 @@ export class Hud {
       ${turning ? '<div class="tip">You are turning. The director loses its solution while the ship swings; steady up before the next salvo.</div>' : ''}`;
   }
 
-  private renderAnalysis(s: Ship, t: Ship) {
-    if (!t) return;
+  private renderAnalysis(s: Ship, t: Ship | null) {
+    if (!t) { $('tgtHead').innerHTML = '<div class="note">No enemy ships in contact.</div>'; $('tgtCalc').innerHTML = ''; return; }
     const d = Math.hypot(t.x - s.x, t.z - s.z), realKm = toReal(d) / 1000;
     const g = s.c.gun, eg = t.c.gun;
     const fall = interp(g.fallDeg, realKm) * DEG, pen = interp(g.penNormal, realKm);

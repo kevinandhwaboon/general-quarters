@@ -47,7 +47,7 @@ export class World {
   enemyReturnFire = false;
   private nextShell = 1;
   private nextSalvo = 1;
-  private zigT = 0;
+  private zigT = new Map<Ship, number>();
 
   add(s: Ship) { this.ships.push(s); return s; }
   log(text: string, cls: '' | 'hit' | 'crit' | 'own' = '') { this.events.push({ type: 'log', text, cls }); }
@@ -68,17 +68,30 @@ export class World {
     }
   }
 
+  /** Nearest living ship of the other side, or null. */
+  nearestEnemy(s: Ship): Ship | null {
+    let best: Ship | null = null, bd = Infinity;
+    for (const o of this.ships) {
+      if (o.side === s.side || !o.alive) continue;
+      const d = Math.hypot(o.x - s.x, o.z - s.z);
+      if (d < bd) { bd = d; best = o; }
+    }
+    return best;
+  }
+
   private enemyBrain(s: Ship, dt: number) {
     if (!s.alive) return;
-    const player = this.ships.find(o => o.side === 'player' && o.alive) ?? null;
     if (this.enemyMode === 'idle') { s.telegraph = 1; }
     else if (this.enemyMode === 'steam') { s.telegraph = 4; }
     else {
-      s.telegraph = 4; this.zigT -= dt;
-      if (this.zigT <= 0) { this.zigT = 70; s.course = wrap((s.course ?? s.heading) + (Math.random() < 0.5 ? -1 : 1) * rnd(30, 50) * DEG); }
+      s.telegraph = 4;
+      const z = (this.zigT.get(s) ?? 0) - dt;
+      this.zigT.set(s, z > 0 ? z : 70);
+      if (z <= 0) s.course = wrap((s.course ?? s.heading) + (Math.random() < 0.5 ? -1 : 1) * rnd(30, 50) * DEG);
     }
     s.holdFire = !this.enemyReturnFire;
-    if (this.enemyReturnFire && player && s.fc.target !== player) s.fc.assign(player);
+    // keep shooting at the current target while it floats; otherwise take the nearest
+    if (this.enemyReturnFire && !(s.fc.target && s.fc.target.alive)) s.fc.assign(this.nearestEnemy(s));
   }
 
   private damageControl(s: Ship, dt: number) {

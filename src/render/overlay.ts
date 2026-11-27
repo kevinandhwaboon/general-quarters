@@ -13,6 +13,8 @@ export class Overlay {
   dpr = 1;
   /** Result of the most recent hit estimate, shown on the target line. */
   estimate: { pHit: number; guns: number; total: number } | null = null;
+  /** Selection box being dragged, in canvas pixels. */
+  box: { x0: number; y0: number; x1: number; y1: number } | null = null;
 
   constructor(private canvas: HTMLCanvasElement, private r: Renderer3D, private world: World) {
     this.ctx = canvas.getContext('2d')!;
@@ -26,17 +28,21 @@ export class Overlay {
   private ring(x: number, z: number, r: number, n = 64) { const pts = []; for (let i = 0; i <= n; i++) { const a = i / n * 2 * Math.PI; pts.push(this.r.project(x + Math.cos(a) * r, z + Math.sin(a) * r)); } return pts; }
   private path(pts: { x: number; y: number }[], close = false) { const g = this.ctx; g.beginPath(); pts.forEach((p, i) => (i ? g.lineTo(p.x, p.y) : g.moveTo(p.x, p.y))); if (close) g.closePath(); }
 
-  draw(selected: Ship | null) {
+  draw(selection: Ship[], primary: Ship) {
     const g = this.ctx, r = this.r, W = r.width, H = r.height, mpp = r.metresPerPixel, C = this.C;
     g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); g.clearRect(0, 0, W, H);
 
-    if (selected && selected.alive) {
-      const s = selected, gun = s.c.gun;
-      // maximum gun range
+    if (primary.alive && selection.includes(primary)) {
+      // maximum gun range of the primary
+      const s = primary, gun = s.c.gun;
       g.strokeStyle = 'rgba(242,178,62,.28)'; g.setLineDash([4, 7]); g.lineWidth = 1;
       this.path(this.ring(s.x, s.z, toGame(gun.maxRangeKm * 1000), 120), true); g.stroke(); g.setLineDash([]);
       const rp = r.project(s.x + toGame(gun.maxRangeKm * 1000) * Math.cos(-0.9), s.z + toGame(gun.maxRangeKm * 1000) * Math.sin(-0.9));
       if (rp.ok) this.label(`${gun.name} · max range ${gun.maxRangeKm} km`, rp.x, rp.y, 'rgba(242,178,62,.7)', '500 11px "Barlow Condensed", sans-serif');
+    }
+    for (const s of selection) {
+      if (!s.alive) continue;
+      const isPrimary = s === primary;
       // course / waypoint
       const sp = r.project(s.x, s.z);
       if (s.waypoint) {
@@ -47,22 +53,24 @@ export class Overlay {
         const [dx, dz] = dir(s.course), L = Math.max(1500, 120 * mpp), q = r.project(s.x + dx * L, s.z + dz * L);
         g.strokeStyle = 'rgba(71,215,193,.55)'; g.setLineDash([3, 6]); g.lineWidth = 1.3; g.beginPath(); g.moveTo(sp.x, sp.y); g.lineTo(q.x, q.y); g.stroke(); g.setLineDash([]);
       }
-      // target line and the arc where each number of guns bears
       const t = s.fc.target;
-      if (t && t.alive) {
-        const d = Math.hypot(t.x - s.x, t.z - s.z), tb = wrap(bearing(s.x, s.z, t.x, t.z) - s.heading) / DEG;
-        const tr = Math.round(tb / 3) * 3;
+      if (!t || !t.alive) continue;
+      const d = Math.hypot(t.x - s.x, t.z - s.z);
+      if (isPrimary) {
+        // the arc where each number of guns bears
+        const tb = wrap(bearing(s.x, s.z, t.x, t.z) - s.heading) / DEG, tr = Math.round(tb / 3) * 3;
         for (let a = tr - 45; a < tr + 45; a += 3) {
           const rel = (a + 1.5) * DEG;
           const n = s.turrets.reduce((k, tu) => k + (tu.alive && canBear(tu.def, rel) ? tu.def.guns : 0), 0), tot = s.turrets.reduce((k, tu) => k + tu.def.guns, 0);
           const pts = []; for (let k = 0; k <= 3; k++) { const [dx, dz] = dir(s.heading + (a + k) * DEG); pts.push(r.project(s.x + dx * d, s.z + dz * d)); }
           this.path(pts); g.strokeStyle = n === tot ? 'rgba(242,178,62,.85)' : n > 0 ? 'rgba(242,178,62,.42)' : 'rgba(242,178,62,.14)'; g.lineWidth = n === tot ? 3 : 2; g.stroke();
         }
-        const a = r.project(s.x, s.z), b = r.project(t.x, t.z);
-        g.strokeStyle = 'rgba(255,95,85,.75)'; g.lineWidth = 1.5; g.setLineDash([7, 5]); g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke(); g.setLineDash([]);
-        const e = this.estimate;
-        this.label(`${km(toReal(d))}${e ? ` · ${e.guns}/${e.total} guns · ${(e.pHit * 100).toFixed(0)}% per shell` : ''}`, (a.x + b.x) / 2, (a.y + b.y) / 2 - 12, C.acc, '600 12.5px "Barlow Condensed", sans-serif');
       }
+      const a = r.project(s.x, s.z), b = r.project(t.x, t.z);
+      g.strokeStyle = isPrimary ? 'rgba(255,95,85,.75)' : 'rgba(255,95,85,.45)'; g.lineWidth = 1.5; g.setLineDash([7, 5]); g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke(); g.setLineDash([]);
+      const e = isPrimary ? this.estimate : null;
+      this.label(`${km(toReal(d))}${e ? ` · ${e.guns}/${e.total} guns · ${(e.pHit * 100).toFixed(0)}% per shell` : ''}`, a.x + (b.x - a.x) * (isPrimary ? 0.5 : 0.35), a.y + (b.y - a.y) * (isPrimary ? 0.5 : 0.35) - 12,
+        isPrimary ? C.acc : 'rgba(242,178,62,.7)', isPrimary ? '600 12.5px "Barlow Condensed", sans-serif' : '500 11.5px "Barlow Condensed", sans-serif');
     }
 
     // fall of shot from the last salvos
@@ -81,12 +89,22 @@ export class Overlay {
       const [hx, hz] = dir(s.heading), hl = s.c.L / 2 * s.vs;
       const pb = r.project(s.x + hx * hl, s.z + hz * hl), ps = r.project(s.x - hx * hl, s.z - hz * hl);
       const y = Math.max(pb.y, ps.y, p.y + 10) + 14;
-      if (s === selected) { this.path(this.ring(s.x, s.z, Math.max(s.c.L * 0.62 * s.vs, 10 * mpp), 40), true); g.strokeStyle = C.friend; g.lineWidth = 2; g.stroke(); }
+      if (s.alive && selection.includes(s)) {
+        this.path(this.ring(s.x, s.z, Math.max(s.c.L * 0.62 * s.vs, 10 * mpp), 40), true);
+        g.strokeStyle = C.friend; g.globalAlpha = s === primary ? 1 : 0.6; g.lineWidth = s === primary ? 2 : 1.5; g.stroke(); g.globalAlpha = 1;
+      }
       this.label(s.name, p.x, y, col, '600 12.5px "Barlow Condensed", sans-serif');
       if (s.alive) {
         const w = 40, yy = y + 11; g.fillStyle = 'rgba(4,9,14,.8)'; g.fillRect(p.x - w / 2 - 1, yy - 1, w + 2, 4);
         const f = s.hp / s.c.hp; g.fillStyle = f > 0.6 ? C.good : f > 0.3 ? C.acc : C.foe; g.fillRect(p.x - w / 2, yy, w * clamp(f, 0, 1), 2);
       } else this.label(s.magazine ? 'blown up' : 'sinking', p.x, y + 13, C.foe, '500 11px "Barlow Condensed", sans-serif');
+    }
+
+    // selection box
+    if (this.box) {
+      const b = this.box;
+      g.fillStyle = 'rgba(71,215,193,.08)'; g.fillRect(Math.min(b.x0, b.x1), Math.min(b.y0, b.y1), Math.abs(b.x1 - b.x0), Math.abs(b.y1 - b.y0));
+      g.strokeStyle = C.friend; g.lineWidth = 1; g.strokeRect(Math.min(b.x0, b.x1) + 0.5, Math.min(b.y0, b.y1) + 0.5, Math.abs(b.x1 - b.x0), Math.abs(b.y1 - b.y0));
     }
 
     // scale bar, labelled in real-equivalent distance

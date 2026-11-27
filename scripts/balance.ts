@@ -1,6 +1,7 @@
 // Headless balance check: Washington engages Kirishima; reports hit rate and time to sink.
 import { ShellType } from '../src/data/guns';
-import { KONGO, NORTH_CAROLINA } from '../src/data/ships';
+import { KONGO, NORTH_CAROLINA, SOUTH_DAKOTA } from '../src/data/ships';
+import { DEG, dir } from '../src/math';
 import { Ship } from '../src/sim/ship';
 import { EnemyMode, World } from '../src/sim/world';
 
@@ -49,4 +50,34 @@ for (const kind of ['ap', 'he'] as ShellType[]) for (const mode of ['idle', 'ste
     if (!p.alive) pSunk++; if (!e.alive) eSunk++;
   }
   console.log(`duel 12 km: fight ${Math.round(len / N)} s  secondary hits W→K ${(pSec / N).toFixed(1)}  K→W ${(eSec / N).toFixed(1)}  mounts out at end W ${(pMounts / N).toFixed(1)}/${NORTH_CAROLINA.secondaries!.length * 2 + 24}  K ${(eMounts / N).toFixed(1)}/28  Washington radar down ${Math.round(radarDown / N)} s  sunk W ${pSunk}/${N} K ${eSunk}/${N}`);
+}
+
+// Squadron: Washington leading South Dakota in column (600 m game, about 2 km real, apart) against
+// Kirishima at about 12 km, both sides firing. Kirishima engages the nearest ship.
+{
+  const N = 12; let len = 0, eSunk = 0, wSunk = 0, sdSunk = 0;
+  const mainHits = { w: 0, sd: 0, onW: 0, onSD: 0 }, secHits = { w: 0, sd: 0 };
+  for (let i = 0; i < N; i++) {
+    const w = new World(); w.enemyMode = 'steam'; w.enemyReturnFire = true;
+    const [fx, fz] = dir(135 * DEG);
+    const wa = w.add(new Ship(NORTH_CAROLINA, 'Washington', 'player', 0, 0, 135));
+    const sd = w.add(new Ship(SOUTH_DAKOTA, 'South Dakota', 'player', -fx * 600, -fz * 600, 135));
+    const e = w.add(new Ship(KONGO, 'Kirishima', 'enemy', 3600 * 0.637, -3600 * 0.771, 250));
+    for (const p of [wa, sd]) { p.telegraph = 4; p.speed = p.maxSpeed * 0.85; p.fc.assign(e); }
+    let t = 0;
+    for (; t < 1200 && (wa.alive || sd.alive) && e.alive; t += 0.1) {
+      w.step(0.1);
+      for (const ev of w.events) {
+        if (ev.type !== 'hit') continue;
+        const sec = ev.shell.turret < 0, by = ev.shell.shooter;
+        if (by === wa) sec ? secHits.w++ : mainHits.w++;
+        else if (by === sd) sec ? secHits.sd++ : mainHits.sd++;
+        else if (!sec) ev.shell.target === wa ? mainHits.onW++ : mainHits.onSD++;
+      }
+      w.events.length = 0;
+    }
+    len += t; if (!e.alive) eSunk++; if (!wa.alive) wSunk++; if (!sd.alive) sdSunk++;
+  }
+  const f = (n: number) => (n / N).toFixed(1);
+  console.log(`squadron 2v1 12 km: fight ${Math.round(len / N)} s  main hits W ${f(mainHits.w)} SD ${f(mainHits.sd)}  5-in hits W ${f(secHits.w)} SD ${f(secHits.sd)}  Kirishima's 14-in hits on W ${f(mainHits.onW)} SD ${f(mainHits.onSD)}  sunk K ${eSunk}/${N} W ${wSunk}/${N} SD ${sdSunk}/${N}`);
 }

@@ -125,6 +125,48 @@ export const NORTH_CAROLINA: ShipClass = {
   catapults: [{ x: -96, z: 7, r: 0.35 }, { x: -96, z: -7, r: -0.35 }],
 };
 
+/**
+ * South Dakota class, as USS South Dakota (BB-57) in November 1942. Shorter than North Carolina with
+ * a single funnel faired into a compact superstructure, an internal belt inclined at 19 degrees and
+ * eight twin 5-inch mounts (she was fitted as a flagship; her sisters had ten). Armour from the usual
+ * published figures (belt 12.2 in on 0.875 in STS, deck about 5.75 in, turret face 18 in); AA fit
+ * and magazine loadout are placeholders.
+ */
+export const SOUTH_DAKOTA: ShipClass = {
+  id: 'southdakota', label: 'South Dakota-class battleship', nation: 'usn', type: 'BB',
+  L: 207, B: 33, fb: 8, sheer: 0.38, fine: 0.55, tumble: 0.94,
+  maxKn: 27.5, tacticalDiameter: 640, accel: 0.07, hp: 150,
+  armour: { belt: 310, beltIncl: 19, beltTop: 2.4, beltBottom: -3.6, citadel: [-58, 66], upperSide: 22, deck: 146, ends: 25, turretFace: 457, turretRoof: 184, conning: 406, superstructure: 16 },
+  gun: GUN_16IN_45_MK6,
+  ammo: { ap: 540, he: 360 }, // 9 guns, about 100 rounds per gun
+  turrets: [
+    { x: 57, h: 11, fwd: true, guns: 3, s: 1.35, maxRel: 150 },
+    { x: 42, h: 15, fwd: true, guns: 3, s: 1.35, maxRel: 150 },
+    { x: -56, h: 11, fwd: false, guns: 3, s: 1.35, minRel: 30 },
+  ],
+  fc: { rangeErr0: 0.006, spotKeep: 0.45, label: 'Mk 38 director + Mk 3 fire-control radar' },
+  sec: { gun: GUN_5IN_38_MK12, gunsPerMount: 2, ammo: 5600, fc: { rangeErr0: 0.012, spotKeep: 0.5, label: 'Mk 37 directors + Mk 4 radar' } }, // 16 guns, about 350 rounds per gun
+  crew: 'New ship, radar-equipped',
+  boxes: [
+    { x: 2, l: 60, w: 24, y0: 0, y1: 4.5 },
+    { x: 22, l: 16, w: 15, y0: 4.5, y1: 10, win: true, wing: 3, part: 'conning' },
+    { x: 21, l: 12, w: 12, y0: 10, y1: 15, win: true },
+    { x: 20, l: 8, w: 8, y0: 15, y1: 19, win: true },
+    { x: -6, l: 18, w: 14, y0: 4.5, y1: 9 },
+    { x: -20, l: 12, w: 12, y0: 4.5, y1: 9.5, win: true },
+  ],
+  funnels: [{ x: -2, r: 4.4, h: 12.5, y0: 4.5, plat: true }],
+  masts: [{ x: 14, h: 38, k: 'tower', y0: 4.5 }, { x: -14, h: 20, k: 'pole', y0: 9 }],
+  secondaries: [{ x: 18, z: 10.5, y: 4.5 }, { x: 6, z: 12, y: 0 }, { x: -6, z: 12, y: 0 }, { x: -18, z: 10.5, y: 4.5 }],
+  secondaryRole: 'dp',
+  radar: true,
+  // late 1942: quadruple 40 mm Bofors and a large number of 20 mm Oerlikons (approximate)
+  aa: [{ k: 'medium', label: '40 mm quad', x: [30, -30] }, { k: 'light', label: '20 mm', x: [74, 36, 28, 12, -12, -26, -36, -46, -70, -80] }],
+  boats: [-12, -26],
+  cranes: [{ x: -88, z: 0, dx: -7, dz: 6 }],
+  catapults: [{ x: -91, z: 7, r: 0.35 }, { x: -91, z: -7, r: -0.35 }],
+};
+
 /** Kongō class after reconstruction, as Kirishima in November 1942. */
 export const KONGO: ShipClass = {
   id: 'kongo', label: 'Kongō-class fast battleship', nation: 'ijn', type: 'BB',
@@ -154,4 +196,4 @@ export const KONGO: ShipClass = {
   catapults: [{ x: -92, z: 0, r: 0.3 }],
 };
 
-export const CLASSES: Record<string, ShipClass> = { northcarolina: NORTH_CAROLINA, kongo: KONGO };
+export const CLASSES: Record<string, ShipClass> = { northcarolina: NORTH_CAROLINA, southdakota: SOUTH_DAKOTA, kongo: KONGO };

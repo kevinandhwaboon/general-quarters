@@ -2,7 +2,7 @@
 
 A browser real-time strategy game about Second World War naval combat in the Pacific, built with TypeScript, Three.js and Vite, and hosted as a static site on GitHub Pages.
 
-This first milestone is a **gunnery proof of concept**: USS Washington against Kirishima, one on one.
+The current build is a **gunnery proof of concept** growing into squadron play: USS Washington and USS South Dakota against Kirishima. Select ships with a click, Shift-click, a dragged box, the number keys or **Q** (all); orders go to every selected ship. Right-click orders a move or engages, right- or middle-drag pans, the wheel zooms.
 
 ## Run it
 
