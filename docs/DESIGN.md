@@ -53,7 +53,7 @@ You cannot shoot what you have not found. Historically the side that found the o
 - **Other reports.** Coastwatchers, submarines, radio direction-finding and intelligence: rare, scenario-specific, late and often vague.
 
 ### Decisions the player makes
-- **Where to search:** draw or pick search sectors (the historical fan of single planes on out-and-back legs). Gaps between sectors, and cloud over them, are where enemies hide.
+- **Where to search:** **both** preset patterns and hand-drawn legs. Presets (a fan of single-plane sectors, a parallel-track sweep, an expanding square around a last-seen point) are quick to issue; the player can also draw each leg, or drag the waypoints of a preset to adjust it. Gaps between sectors, and cloud over them, are where enemies hide.
 - **When to launch:** a dawn search finds the enemy early but is planned with stale information; a late launch can miss the window to strike first.
 - **How many planes to spend:** every plane searching is one not striking, spotting fall of shot or flying fighter cover. Floatplanes can also spot for the guns and drop flares at night.
 - **Shadow or return:** a plane that stays in contact keeps the picture current but runs low on fuel and can be shot down; once it turns for home the contact starts to go stale.
@@ -62,9 +62,23 @@ You cannot shoot what you have not found. Historically the side that found the o
 
 ### How reports work
 - **Delay:** sightings reach the player by radio after a delay; long-range reports arrive later than tactical ones.
-- **Errors:** type, number, course and position can all be wrong. Misidentification is more likely from high altitude, through cloud, at long range, by inexperienced observers, and for similar silhouettes (cruiser for battleship, oiler for carrier). Position error grows with the plane's distance from its own fleet (dead-reckoning navigation).
+- **Errors:** type, number, course and position can all be wrong. See *Misidentification* below.
 - **Ageing:** a contact that is not refreshed becomes an uncertainty area that grows with time and the enemy's likely speed, then a last-seen marker.
-- **Being seen:** your scouts can be sighted, and an enemy plane overhead means you have probably been reported. Shooting down or driving off shadowers (fighters, AA) denies the enemy information. The enemy AI searches, reports and makes mistakes under the same rules.
+- **Being seen:** your scouts can be sighted, and an enemy plane overhead means you have probably been reported. **The player sees enemy scouts only when one of their ships spots them** (lookouts, or air-search radar where fitted, which sees them much farther out). A scout that is never spotted reports you without your knowing. Shooting down or driving off shadowers (fighters, AA) denies the enemy information. The enemy AI searches, reports and makes mistakes under the same rules.
+
+### Misidentification (proposed model)
+Historical pattern: at Coral Sea a Japanese scout reported a carrier and a cruiser that were really the oiler *Neosho* and the destroyer *Sims*, and the main strike went after them while the American carriers went untouched; an American report of "two carriers and four heavy cruisers" was a coding slip for two cruisers and two destroyers. At Savo, Mikawa's cruisers were reported as including "seaplane tenders", and the Allies expected no attack that night. At Samar, Kurita took escort carriers for fleet carriers and destroyers for cruisers.
+
+What a report can get wrong:
+- **Type**: confusion between similar silhouettes and sizes: battleship and heavy cruiser, heavy and light cruiser, light cruiser and destroyer, fleet carrier, escort carrier and seaplane tender, oiler or large transport and carrier.
+- **Number**: small ships are missed or double-counted; big formations are usually overestimated.
+- **Position**: dead-reckoning error that grows with the plane's distance from its own fleet (tens of kilometres at long range), occasionally a garbled grid reference.
+- **Course and speed**: judged from wakes; tens of degrees and several knots out.
+- **Coding slips**: rare, but can turn one report into nonsense.
+
+What makes errors more likely: high altitude and long viewing distance (scouts kept their distance from AA), cloud, haze, dawn, dusk and night, inexperienced observers (by nation, year and crew quality), a single quick pass rather than shadowing, and strike planes doing a scout's job. Ships sighting each other at gun range with rangefinder optics identify far more reliably; misidentification is mainly an aircraft problem.
+
+How it plays: each sighting rolls an identification quality from those factors, and each field of the report gets an error to match. The report shows the observer's **stated confidence** ("believed", "possibly"), which tracks accuracy loosely, not perfectly. Shadowing and repeated passes refine a report toward the truth; independent reports of the same force can disagree, and the player has to weigh them. The results screen shows what each report got wrong.
 
 ### Presentation
 - The map shows only what you know: contacts with their state and uncertainty, scout tracks and search sectors, and report cards in the log ("2 battleships, 4 destroyers, course 120, 20 kn — Tone's No. 4 plane, 07:28") showing their age and confidence.
@@ -129,8 +143,5 @@ Alongside: unit tests for the simulation, a seeded random-number generator for r
 
 ## 10. Open questions
 
-- How much control over searching: drawing each search leg, picking from preset patterns, or both?
-- How punishing misidentification should be: realistic error rates can feel unfair; how much should observer confidence be shown?
-- Should the player see enemy scouts overhead (and know they have been reported), or only when a ship sights them?
-- Guadalcanal is a night action: how much do floatplanes matter there (flares, the approach) compared with carrier battles?
+- How punishing misidentification should be (see section 4): realistic error rates throughout, or a gentler default with a "realistic" option? How closely should stated confidence track accuracy?
 - Sources for per-class magazine loadouts (rounds per gun by shell type).
