@@ -6,6 +6,8 @@ The master record of what this game is and what has been decided. Update it when
 
 A real-time strategy game about **Second World War naval combat in the Pacific**, recreating actual engagements. It should **play like Red Alert 2** (select, click to attack, quick to read) while being **as realistic as possible** underneath: gunnery, armour, fire control, formations, visibility.
 
+**Fog of war is a core pillar, not a feature.** You start most battles not knowing where the enemy is or what it has. **Scout planes are the primary way to find the enemy**, and battles are won or lost on reconnaissance decisions: where to search, when to launch, how many planes to spend on looking rather than fighting, and whether to trust a report.
+
 - Runs entirely in the browser (TypeScript, Three.js, Vite) and is hosted on **GitHub Pages**: static files, no server.
 - **Single-player.** Multiplayer is out of scope for now. If it comes back, the simulation would need deterministic maths (seeded random numbers, no reliance on `Math.sin` being identical across browsers).
 
@@ -19,7 +21,8 @@ A real-time strategy game about **Second World War naval combat in the Pacific**
 | Victory | **Fixed victory conditions** per scenario, based on objectives (protect or destroy, bombard, break through, survive or delay, find and strike first). A crippled ship counts toward victory. Time limits such as "clear the area before dawn". Withdrawing through an exit can earn a partial win. The historical result is shown on the results screen for comparison |
 | Control | Individual ships. Several selected ships can be given **formation orders** |
 | Gunnery | RA2-simple: select a ship, click a target. **The player never aims.** Accuracy and damage depend on the ship, range and the **angles** of firer and target. Positioning is the skill; going broadside is a risk/reward choice |
-| Fog of war | What your ships would know, like RTS fog but about **contacts, not terrain**: identified, classified (silhouette only), detected (unknown blip with an uncertainty area), lost (last-seen marker). Sensors: visual, night, radar (by nation and year), sonar, aircraft. Tactical vision is shared instantly; long-range reports (scout planes, coastwatchers) arrive late and may be wrong. The enemy AI plays under the same fog |
+| Fog of war | **Core pillar** (see section 4). What your forces would know, like RTS fog but about **contacts, not terrain**: identified, classified (silhouette only), detected (unknown blip with an uncertainty area), lost (last-seen marker). **Scout planes are the primary way to discover enemy units**; ships' own visual and radar sight is short-range by comparison. Reports arrive late and may be wrong. The enemy AI plays under the same fog |
+| Reconnaissance | Battle outcomes are **heavily influenced by recon decisions**: search sectors, launch timing, planes committed to scouting versus striking, shadowing a contact versus coming home, and how far to trust a report |
 | Secondary batteries | Fire **automatically** at enemy ships within their range (mainly destroyers and cruisers), independent of the main-battery target |
 | Shell types | **The player chooses** AP or HE per ship (common/SAP where the nation used it; star shell at night). Changing type takes one or two salvos while the shells already in the hoists are fired. Scenarios may start a ship loaded with the wrong type (Hiei and Kirishima, 13 Nov 1942) |
 | Ammunition | **Finite.** Each class carries a realistic magazine loadout per shell type (main, secondary and AA separately); the UI shows rounds left. Running dry is a real outcome |
@@ -40,7 +43,49 @@ Real engagements are fought at distances of hundreds of ship lengths, too far ap
 - Aircraft altitude is drawn compressed (1:6) with ground markers. Accepted as reasonable for now; revisit once the air layer is playable.
 - Time compression goes from pause up to 8× in the proof of concept, and up to 60× for carrier operations.
 
-## 4. Combat model (implemented in the proof of concept)
+## 4. Fog of war and reconnaissance
+
+You cannot shoot what you have not found. Historically the side that found the other first, and believed the right report, usually won: Midway turned on a Japanese search plane launched half an hour late and a search line with a gap in it; at Coral Sea an American strike was sent after "two carriers and four cruisers" that were really two cruisers and two destroyers; at Samar, Kurita took escort carriers for fleet carriers and broke off. The game should produce the same kind of decisions and mistakes.
+
+### Sources of information
+- **Scout planes (primary).** Catapult floatplanes on battleships and cruisers (US Kingfisher and Seagull; IJN Pete, Jake and Dave; Japanese cruisers such as Tone were built to carry several), carrier scouts (Dauntless scouting squadrons, Kates and Vals flying searches), and land- or tender-based flying boats (Catalina, Mavis, Emily) with long range. Each type has its own range, speed, endurance, observer quality and vulnerability.
+- **Ships' own sensors (short range).** Lookouts and rangefinders out to the horizon from the masthead (tens of kilometres for a large ship in clear daylight, far less at night or in rain), and radar by nation and year. Enough to fight with, not enough to find a fleet.
+- **Other reports.** Coastwatchers, submarines, radio direction-finding and intelligence: rare, scenario-specific, late and often vague.
+
+### Decisions the player makes
+- **Where to search:** **both** preset patterns and hand-drawn legs. Presets (a fan of single-plane sectors, a parallel-track sweep, an expanding square around a last-seen point) are quick to issue; the player can also draw each leg, or drag the waypoints of a preset to adjust it. Gaps between sectors, and cloud over them, are where enemies hide.
+- **When to launch:** a dawn search finds the enemy early but is planned with stale information; a late launch can miss the window to strike first.
+- **How many planes to spend:** every plane searching is one not striking, spotting fall of shot or flying fighter cover. Floatplanes can also spot for the guns and drop flares at night.
+- **Shadow or return:** a plane that stays in contact keeps the picture current but runs low on fuel and can be shot down; once it turns for home the contact starts to go stale.
+- **Recovery has a cost:** floatplanes land alongside and are hoisted aboard, so the parent ship must slow down or stop; carriers must turn into the wind.
+- **Whether to believe it:** reports carry the observer's confidence, and the player decides whether to act on a single sighting.
+
+### How reports work
+- **Delay:** sightings reach the player by radio after a delay; long-range reports arrive later than tactical ones.
+- **Errors:** **for now, identification is perfect**: a scout that sees a force reports its true type, number, position, course and speed. The one limit is **cloud cover: ships under cloud are invisible to aircraft** (ships can still see each other normally). Clouds are areas on the map that drift with the wind, so a force can hide under a cloud bank and a search sector under cloud finds nothing. Fallible reports (*Misidentification* below) are a possible later layer.
+- **Ageing:** a contact that is not refreshed becomes an uncertainty area that grows with time and the enemy's likely speed, then a last-seen marker.
+- **Being seen:** your scouts can be sighted, and an enemy plane overhead means you have probably been reported. **The player sees enemy scouts only when one of their ships spots them** (lookouts, or air-search radar where fitted, which sees them much farther out). A scout that is never spotted reports you without your knowing. Shooting down or driving off shadowers (fighters, AA) denies the enemy information. The enemy AI searches, reports and makes mistakes under the same rules.
+
+### Misidentification (deferred; not in the first version)
+Historical pattern: at Coral Sea a Japanese scout reported a carrier and a cruiser that were really the oiler *Neosho* and the destroyer *Sims*, and the main strike went after them while the American carriers went untouched; an American report of "two carriers and four heavy cruisers" was a coding slip for two cruisers and two destroyers. At Savo, Mikawa's cruisers were reported as including "seaplane tenders", and the Allies expected no attack that night. At Samar, Kurita took escort carriers for fleet carriers and destroyers for cruisers.
+
+What a report can get wrong:
+- **Type**: confusion between similar silhouettes and sizes: battleship and heavy cruiser, heavy and light cruiser, light cruiser and destroyer, fleet carrier, escort carrier and seaplane tender, oiler or large transport and carrier.
+- **Number**: small ships are missed or double-counted; big formations are usually overestimated.
+- **Position**: dead-reckoning error that grows with the plane's distance from its own fleet (tens of kilometres at long range), occasionally a garbled grid reference.
+- **Course and speed**: judged from wakes; tens of degrees and several knots out.
+- **Coding slips**: rare, but can turn one report into nonsense.
+
+What makes errors more likely: high altitude and long viewing distance (scouts kept their distance from AA), cloud, haze, dawn, dusk and night, inexperienced observers (by nation, year and crew quality), a single quick pass rather than shadowing, and strike planes doing a scout's job. Ships sighting each other at gun range with rangefinder optics identify far more reliably; misidentification is mainly an aircraft problem.
+
+How it plays: each sighting rolls an identification quality from those factors, and each field of the report gets an error to match. The report shows the observer's **stated confidence** ("believed", "possibly"), which tracks accuracy loosely, not perfectly. Shadowing and repeated passes refine a report toward the truth; independent reports of the same force can disagree, and the player has to weigh them. The results screen shows what each report got wrong.
+
+### Presentation
+- The map shows only what you know: contacts with their state and uncertainty, scout tracks and search sectors, and report cards in the log ("2 battleships, 4 destroyers, course 120, 20 kn — Tone's No. 4 plane, 07:28") showing their age and confidence.
+- The **results screen reveals the truth**: where everything really was, what each report got right or wrong, and what you believed at each decision.
+- Searching works on the zoomed-out strategic layer with time compression (up to 60×); combat on the battle layer.
+
+## 5. Combat model (implemented in the proof of concept)
 
 See `README.md` for file pointers.
 
@@ -56,7 +101,7 @@ See `README.md` for file pointers.
 - **UI feedback**: hit chance per shell (Monte Carlo estimate), expected hits per salvo, where hits would land (zone breakdown), solution error, last salvo (over, short, straddle, hits), turret states, effective armour against penetration, and immune zones for both sides.
 - **Balance** (`scripts/balance.ts`): about 17% per shell against a stationary target at about 18 km; Kirishima sinks in about 9 minutes of game time. HE knocks out about three times as many of Kirishima's 28 mounts as AP (about 8 destroyed per fight against 2). With HE against Kirishima: no citadel hits, sinks in about half of 30-minute trials against a stationary target, mostly from fires, using most of the 360 HE rounds. Close duel at about 12 km with both sides firing: Washington's 5-inch guns score about 44 hits on Kirishima (historically roughly 40 on 14–15 Nov 1942) and leave about 10 of her 28 mounts out of action; Kirishima's casemates score about 9. 5-inch hit rates of about 10% at 12–15 km may be high; check when there are smaller targets. Known issue: hit rates against moving or zig-zagging targets come out *higher* than against a stationary one, because the moving target closes the range. Needs retuning.
 
-## 5. Art direction (approved in mockups)
+## 6. Art direction (approved in mockups)
 
 - Real-time 3D with a fixed orthographic camera (56° pitch, north up), giving an RA2-like look.
 - **Ships are built in code from class data** (`src/render/shipModel.ts`): hull with flare and bulges, sloped turrets, cage, tripod and pagoda masts, secondary guns, boats, cranes, catapults with floatplanes. One merged, vertex-coloured mesh per ship. The user asked for **more detail**, and the current level was approved.
@@ -66,7 +111,7 @@ See `README.md` for file pointers.
 - **More ship detail is wanted** beyond the current approved level (e.g. textured plating, weathering, finer secondary and AA mounts).
 - Real ship designs are public historical information; never copy other people's models, drawings or game assets.
 
-## 6. Scenarios
+## 7. Scenarios
 
 | Scenario | Why | Notes |
 |---|---|---|
@@ -77,26 +122,27 @@ See `README.md` for file pointers.
 | ~~Pearl Harbor, Dec 1941~~ | Was only a test of the carrier layer | Mockup exists. **Shelved**; not a planned scenario |
 | Midway, Coral Sea | Carrier against carrier | Needs the air and operational layer |
 
-## 7. Roadmap
+## 8. Roadmap
 
 0. ✅ **Gunnery proof of concept**: Washington vs Kirishima, one against one.
 1. **Squadrons and formations** (next): several ships per side, box selection, column, line abreast and line of bearing, turning in succession vs turning together, fire distribution, crossing the T. Add cruiser and destroyer classes.
 2. **Enemy captain AI**: manoeuvre to keep guns bearing, distribute fire, break off when damaged.
 3. **Torpedoes and destroyers**: Long Lance spreads, combing tracks, screens.
-4. **Visibility and night**: contact levels, searchlights, star shells, radar against optics, smoke.
-5. **First historical scenario** (Guadalcanal, November 1942) with victory conditions and a results screen.
-6. **Carriers and the air layer** (Midway, Coral Sea).
+4. **Fog of war and scout floatplanes**: contact levels and ageing, ships' visual and radar detection, catapult floatplanes with search sectors, launch and recovery, delayed and fallible reports, the enemy searching under the same rules. Brings the first aircraft, so automatic AA fire comes with it. Night: searchlights, star shells, flares dropped by floatplanes, radar against optics, smoke.
+5. **First historical scenario** (Guadalcanal, November 1942) with victory conditions and a results screen that reveals the truth behind the fog.
+6. **Carriers and the air layer** (Midway, Coral Sea): carrier scouts and flying boats, strikes, fighter cover and shadowers.
 
 Alongside: unit tests for the simulation, a seeded random-number generator for replays, and checking gun and armour data against sources.
 
-## 8. Mockups (private claude.ai artifacts)
+## 9. Mockups (private claude.ai artifacts)
 
 - Savo Island night action (fog of war, angle-based gunnery UI): https://claude.ai/artifact/17hwvNny9QNMAZwwZFMdDf
 - Pearl Harbor (daytime, carriers, air groups, detailed models): https://claude.ai/artifact/98SRWtxNS2Gte9rXbLfDaV
 - Gunnery proof of concept preview: https://claude.ai/artifact/W7ntX4TdLJC6arc4t8awnq
 - Live build: https://kevinandhwaboon.github.io/general-quarters/
 
-## 9. Open questions
+## 10. Open questions
 
-- When to schedule shell types, finite ammunition, system damage, and automatic secondary and AA fire (likely alongside squadrons, before torpedoes; AA needs aircraft first).
+- If misidentification is added later: realistic error rates, or a gentler default with a "realistic" option?
+- Cloud cover: do clouds also block ships' visual sighting (rain squalls), and do aircraft above cloud stay hidden from ships?
 - Sources for per-class magazine loadouts (rounds per gun by shell type).
