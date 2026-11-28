@@ -1,8 +1,9 @@
 import { SHELL_LABEL, ShellType } from './data/guns';
-import { KONGO, NORTH_CAROLINA, SOUTH_DAKOTA } from './data/ships';
+import { FLETCHER, KONGO, NORTH_CAROLINA, SOUTH_DAKOTA } from './data/ships';
 import { bearing, clamp, DEG, dir, wrap } from './math';
 import { Overlay } from './render/overlay';
 import { Renderer3D } from './render/renderer';
+import { Formation, FORMATION_LABEL, FormationType } from './sim/formation';
 import { Ship, TELEGRAPH } from './sim/ship';
 import { EnemyMode, World } from './sim/world';
 import { Hud } from './ui/hud';
@@ -11,7 +12,7 @@ const $ = (id: string) => document.getElementById(id)!;
 const mapEl = $('map'), glCanvas = $('gl') as HTMLCanvasElement, ovCanvas = $('ov') as HTMLCanvasElement;
 
 const world = new World();
-/** The player's ships, in the order they are numbered (keys 1-9). */
+/** The player's ships. */
 let fleet: Ship[] = [];
 /** Selected player ships. The first living one is the primary: the panels show it. */
 let selection: Ship[] = [];
@@ -26,25 +27,33 @@ const primary = () => alive(selection)[0] ?? alive(fleet)[0] ?? fleet[0];
 const focusTarget = () => { const p = primary(), t = p.fc.target; return t && t.alive ? t : world.nearestEnemy(p) ?? enemies()[0] ?? null; };
 /** Ships that receive orders. */
 const ordered = () => alive(selection);
+/** Ships the player commands directly, in the order they are numbered (keys 1-9): everything but screen escorts. */
+const units = () => fleet.filter(s => !world.formationOf(s)?.screen.includes(s));
+const inScreen = (s: Ship) => !!world.formationOf(s)?.screen.includes(s);
 const shortName = (s: Ship) => s.name.replace(/^USS /, '');
 const names = (ss: Ship[]) => ss.length === 1 ? ss[0].name : ss.map(shortName).join(', ');
 
-const hud = new Hud(world, { fleet: () => fleet, selection: () => selection, primary, target: focusTarget });
+const hud = new Hud(world, { fleet: () => fleet, units, formations: () => world.formations.filter(f => f.guide.side === 'player'), selection: () => selection, primary, target: focusTarget });
 
-/** The trial: Washington leading South Dakota in column at full speed, Kirishima about 20 km (real) away on the bow. */
+/**
+ * The trial: Washington leading South Dakota in column at full speed with four destroyers screening
+ * ahead, Kirishima about 20 km (real) away on the bow.
+ */
 function setup() {
-  world.ships.length = 0; world.shells.length = 0; world.salvos.clear(); world.events.length = 0; world.time = 0;
+  world.ships.length = 0; world.shells.length = 0; world.salvos.clear(); world.events.length = 0; world.time = 0; world.formations.length = 0;
   const lead = world.add(new Ship(NORTH_CAROLINA, 'USS Washington', 'player', 0, 0, 45));
-  // 600 m astern in game distance, about 2 km real-equivalent
-  const [fx, fz] = dir(45 * DEG);
-  const second = world.add(new Ship(SOUTH_DAKOTA, 'USS South Dakota', 'player', -fx * 600, -fz * 600, 45));
+  const second = world.add(new Ship(SOUTH_DAKOTA, 'USS South Dakota', 'player', 0, 0, 45));
+  const screen = ['USS Fletcher', "USS O'Bannon", 'USS Nicholas', 'USS Radford'].map(n => world.add(new Ship(FLETCHER, n, 'player', 0, 0, 45)));
   const kirishima = world.add(new Ship(KONGO, 'Kirishima', 'enemy', 3800, -4600, 250));
-  fleet = [lead, second];
-  for (const s of fleet) { s.telegraph = 4; s.speed = 0.85 * s.maxSpeed; }
+  fleet = [lead, second, ...screen];
+  const f = new Formation('column', [lead, second], screen);
+  world.formations.push(f);
+  // start every ship on her station
+  for (const s of fleet) { if (s !== lead) { const st = f.station(s); s.x = st.x; s.z = st.z; } s.telegraph = 4; s.speed = 0.85 * lead.maxSpeed; }
   kirishima.telegraph = 1;
   for (const s of world.ships) s.histT = 0;
-  selection = [...fleet];
-  hud.pushLog('Kirishima sighted fine on the starboard bow. Both battleships selected: click her to open fire.', 'own');
+  selection = [lead, second];
+  hud.pushLog('Kirishima sighted fine on the starboard bow. Battleships in column, destroyers screening ahead. Click her to open fire.', 'own');
 }
 setup();
 for (const s of world.ships) r3.addShip(s);
@@ -82,7 +91,28 @@ function pruneSelection() {
   if (!selection.length && alive(fleet).length) selection = [alive(fleet)[0]];
 }
 
+/** Clicking a screen escort selects her formation's guide; Alt-click selects the escort herself. */
+const pickable = (s: Ship, alt: boolean) => !alt && inScreen(s) ? world.formationOf(s)!.guide : s;
+
 /* ---------- orders (to every selected ship) ---------- */
+/**
+ * Ships that take a movement order. A guide takes it for her whole formation, and members whose
+ * guide is also selected simply follow. A member ordered on her own leaves the formation.
+ */
+function movers(): Ship[] {
+  const ss = ordered(), out: Ship[] = [], left: Ship[] = [];
+  for (const s of ss) {
+    const f = world.formationOf(s);
+    if (!f || f.guide === s) { out.push(s); continue; }
+    if (ss.includes(f.guide)) continue;
+    f.remove(s); left.push(s); out.push(s);
+  }
+  if (left.length) hud.pushLog(`${names(left)} ${left.length === 1 ? 'leaves' : 'leave'} the formation`);
+  pruneFormations();
+  return out;
+}
+function pruneFormations() { world.formations = world.formations.filter(f => { if (f.empty) { f.dissolve(); return false; } return true; }); }
+
 function engage(target?: Ship) {
   const ss = ordered(); if (!ss.length) return;
   const byTarget = new Map<Ship, Ship[]>();
@@ -94,9 +124,9 @@ function engage(target?: Ship) {
   }
   for (const [t, group] of byTarget) hud.pushLog(`${names(group)}: commence firing on ${t.name}`);
 }
-function steer(delta: number) { for (const s of ordered()) { s.waypoint = null; s.course = wrap((s.course ?? s.heading) + delta * DEG); } }
-function steady() { for (const s of ordered()) { s.waypoint = null; s.course = s.heading; } }
-function telegraph(i: number) { for (const s of ordered()) s.telegraph = clamp(i, 0, TELEGRAPH.length - 1); }
+function steer(delta: number) { for (const s of movers()) { s.waypoint = null; s.course = wrap((s.course ?? s.heading) + delta * DEG); } }
+function steady() { for (const s of movers()) { s.waypoint = null; s.course = s.heading; } }
+function telegraph(i: number) { for (const s of movers()) s.telegraph = clamp(i, 0, TELEGRAPH.length - 1); }
 function stepTelegraph(d: number) { telegraph(primary().telegraph + d); }
 function setShell(k: ShellType) {
   const ss = ordered().filter(s => s.shellType !== k); if (!ss.length) return;
@@ -111,7 +141,7 @@ function toggleHold() {
   hud.pushLog(`${names(ss)}: ${hold ? 'hold fire' : 'weapons free'}`);
 }
 function turnToBeam() {
-  const ss = ordered().filter(s => s.fc.target?.alive || world.nearestEnemy(s)); if (!ss.length) return;
+  const ss = movers().filter(s => s.fc.target?.alive || world.nearestEnemy(s)); if (!ss.length) return;
   for (const s of ss) {
     // put the target on the nearer beam so every turret bears
     const t = s.fc.target?.alive ? s.fc.target : world.nearestEnemy(s)!;
@@ -123,9 +153,80 @@ function turnToBeam() {
 }
 /** Move order: the group keeps its shape around the clicked point (formations come later). */
 function moveTo(x: number, z: number) {
-  const ss = ordered(); if (!ss.length) return;
+  const ss = movers(); if (!ss.length) return;
   const cx = ss.reduce((a, s) => a + s.x, 0) / ss.length, cz = ss.reduce((a, s) => a + s.z, 0) / ss.length;
   for (const s of ss) s.waypoint = { x: x + s.x - cx, z: z + s.z - cz };
+}
+
+/* ---------- formations ---------- */
+/** The ships a formation order covers: a selected guide brings her whole formation. */
+function shipsToForm(): Ship[] {
+  const set = new Set<Ship>();
+  for (const s of ordered()) { const f = world.formationOf(s); (f && f.guide === s ? alive(f.members) : [s]).forEach(m => set.add(m)); }
+  return [...set];
+}
+/** Line of bearing stepped back on the side away from the enemy, so the line never masks its own fire. */
+function awaySide(g: Ship) {
+  const t = g.fc.target?.alive ? g.fc.target : world.nearestEnemy(g);
+  return t && wrap(bearing(g.x, g.z, t.x, t.z) - g.heading) > 0 ? -135 * DEG : 135 * DEG;
+}
+function form(type: FormationType) {
+  const ships = shipsToForm();
+  const same = world.formations.find(f => alive(f.members).length === ships.length && ships.every(s => f.has(s)));
+  if (same) {
+    same.type = type; if (type === 'bearing') same.lineBearing = awaySide(same.guide);
+    same.reform();
+    hud.pushLog(`${same.guide.name}: form ${FORMATION_LABEL[type].toLowerCase()}`);
+    return;
+  }
+  if (ships.length < 2) { hud.pushLog('Select two or more ships to form up.'); return; }
+  for (const s of ships) world.formationOf(s)?.remove(s);
+  pruneFormations();
+  let line = ships.filter(s => s.c.type !== 'DD'), screen = ships.filter(s => s.c.type === 'DD');
+  if (!line.length) { line = screen; screen = []; }
+  const g = line.includes(primary()) ? primary() : line[0], [hx, hz] = dir(g.heading);
+  // the rest of the line in order astern of the guide
+  const ahead = (s: Ship) => (s.x - g.x) * hx + (s.z - g.z) * hz;
+  line = [g, ...line.filter(s => s !== g).sort((a, b) => ahead(b) - ahead(a))];
+  const f = new Formation(type, line, screen);
+  if (type === 'bearing') f.lineBearing = awaySide(g);
+  world.formations.push(f);
+  if (!selection.includes(g)) selection = [g, ...selection];
+  hud.pushLog(`${FORMATION_LABEL[type]} formed on ${g.name}: ${line.length} in line${screen.length ? `, ${screen.length} screening` : ''}`);
+}
+/** Formations whose guide is selected. */
+const selectedFormations = () => world.formations.filter(f => ordered().includes(f.guide));
+function breakFormation() {
+  const done: string[] = [];
+  for (const s of ordered()) {
+    const f = world.formationOf(s); if (!f) continue;
+    if (f.guide === s) { f.dissolve(); done.push(`${s.name}: formation dissolved`); }
+    else { f.remove(s); done.push(`${s.name} leaves the formation`); }
+  }
+  pruneFormations();
+  done.forEach(t => hud.pushLog(t));
+}
+function reform() { for (const f of selectedFormations()) { f.reform(); hud.pushLog(`${f.guide.name}: re-form on the guide's course`); } }
+function toggleTurn() {
+  for (const f of selectedFormations()) { f.setTurn(f.turn === 'succession' ? 'together' : 'succession'); hud.pushLog(`${f.guide.name}: turns ${f.turn === 'succession' ? 'in succession' : 'together'}`); }
+}
+/** Send one destroyer from the screen on her own; she is selected. */
+function detach(f: Formation) {
+  const dd = f.screen.find(s => s.alive); if (!dd) return;
+  f.remove(dd); pruneFormations();
+  selection = [dd];
+  hud.pushLog(`${dd.name} detached from the screen`);
+}
+/** Selected destroyers steaming independently rejoin the nearest formation's screen. */
+function rejoin() {
+  for (const s of ordered().filter(o => o.c.type === 'DD' && !world.formationOf(o))) {
+    const fs = world.formations.filter(f => f.guide.side === s.side);
+    const f = fs.sort((a, b) => Math.hypot(a.guide.x - s.x, a.guide.z - s.z) - Math.hypot(b.guide.x - s.x, b.guide.z - s.z))[0];
+    if (!f) { hud.pushLog('No formation to rejoin.'); return; }
+    f.screen.push(s); selection = selection.filter(o => o !== s);
+    hud.pushLog(`${s.name} rejoins ${f.guide.name}'s screen`);
+  }
+  pruneSelection();
 }
 
 document.addEventListener('click', e => {
@@ -165,11 +266,24 @@ document.addEventListener('click', e => {
 });
 
 // panels are redrawn several times a second, so act on press rather than on click
-document.addEventListener('pointerdown', e => {
-  const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-shell], button[data-pick]');
-  if (!b) return;
+const PRESS = 'button[data-shell], button[data-pick], button[data-fsel], button[data-form], button[data-fcmd]';
+function press(b: HTMLButtonElement, shift: boolean) {
   if (b.dataset.shell) setShell(b.dataset.shell as ShellType);
-  if (b.dataset.pick) select([fleet[+b.dataset.pick]], e.shiftKey);
+  if (b.dataset.pick) select([fleet[+b.dataset.pick]], shift);
+  if (b.dataset.fsel) { const f = world.formations[+b.dataset.fsel]; if (f) select(f.line, shift); }
+  if (b.dataset.form) form(b.dataset.form as FormationType);
+  const c = b.dataset.fcmd;
+  if (c === 'turn') toggleTurn(); else if (c === 'reform') reform(); else if (c === 'break') breakFormation(); else if (c === 'rejoin') rejoin();
+  else if (c === 'detach') { const f = world.formations[+b.dataset.f!]; if (f) detach(f); }
+}
+document.addEventListener('pointerdown', e => {
+  const b = (e.target as HTMLElement).closest<HTMLButtonElement>(PRESS);
+  if (b && e.button === 0) press(b, e.shiftKey);
+});
+// keyboard activation (Enter or Space on a focused button) arrives as a click with no pointer
+document.addEventListener('click', e => {
+  const b = (e.target as HTMLElement).closest<HTMLButtonElement>(PRESS);
+  if (b && e.detail === 0) press(b, e.shiftKey);
 });
 window.addEventListener('keydown', e => {
   if ((e.target as HTMLElement).closest('input')) return;
@@ -178,8 +292,10 @@ window.addEventListener('keydown', e => {
   else if (k === 'a') steer(-10); else if (k === 'd') steer(10);
   else if (k === 'f') toggleShell();
   else if (k === 't') engage(); else if (k === 'h') toggleHold();
-  else if (k === 'q') select(fleet);
-  else if (/^Digit[1-9]$/.test(e.code) && fleet[+e.code.slice(5) - 1]) select([fleet[+e.code.slice(5) - 1]], e.shiftKey);
+  else if (k === 'q') select(units());
+  else if (k === 'c') form('column'); else if (k === 'b') form('bearing'); else if (k === 'o') form('circle');
+  else if (k === 'r') reform(); else if (k === 'v') toggleTurn(); else if (k === 'x') breakFormation();
+  else if (/^Digit[1-9]$/.test(e.code) && units()[+e.code.slice(5) - 1]) select([units()[+e.code.slice(5) - 1]], e.shiftKey);
   else if (k === ' ') { e.preventDefault(); paused = !paused; }
 });
 
@@ -228,16 +344,23 @@ ovCanvas.addEventListener('pointerup', e => {
   if (!drag.moved) {
     if (drag.button === 0) {
       const s = shipAt(p.x, p.y);
-      if (s && s.side === 'player') select([s], drag.shift || e.shiftKey);
+      if (s && s.side === 'player') select([pickable(s, e.altKey)], drag.shift || e.shiftKey);
       else if (s && s.side === 'enemy') engage(s);
     } else if (drag.button === 2) order(p.x, p.y);
   } else if (drag.mode === 'box' && overlay.box) {
     const b = overlay.box, x0 = Math.min(b.x0, b.x1), x1 = Math.max(b.x0, b.x1), y0 = Math.min(b.y0, b.y1), y1 = Math.max(b.y0, b.y1);
-    const inside = alive(fleet).filter(s => { const q = r3.project(s.x, s.z); return q.x >= x0 && q.x <= x1 && q.y >= y0 && q.y <= y1; });
+    const inside = alive(units()).filter(s => { const q = r3.project(s.x, s.z); return q.x >= x0 && q.x <= x1 && q.y >= y0 && q.y <= y1; });
     if (inside.length) select(inside, drag.shift || e.shiftKey);
   }
   overlay.box = null;
   drag = null;
+});
+// double-click a ship to select her whole formation
+ovCanvas.addEventListener('dblclick', e => {
+  const p = local(e), s = shipAt(p.x, p.y);
+  if (!s || s.side !== 'player') return;
+  const f = world.formationOf(s);
+  if (f) select(f.line, e.shiftKey);
 });
 ovCanvas.addEventListener('pointercancel', () => { overlay.box = null; drag = null; });
 ovCanvas.addEventListener('contextmenu', e => {

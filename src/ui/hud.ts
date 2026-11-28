@@ -4,6 +4,7 @@ import { ShipClass } from '../data/ships';
 import { bearing, clamp, DEG, deg3, hms, interp, km, wrap } from '../math';
 import { Zone, ZONE_LABEL } from '../sim/combat';
 import { hullProfile } from '../sim/hull';
+import { Formation, FORMATION_LABEL } from '../sim/formation';
 import { canBear, isAA, isSecondary, Mount, mountBears, Ship, TELEGRAPH } from '../sim/ship';
 import { World } from '../sim/world';
 
@@ -45,6 +46,9 @@ export function immuneZone(c: ShipClass, gun: GunSpec, aspect: number): [number,
 /** What the HUD reads from the game: the player's ships, the selection, the ship the panels show and its target. */
 export interface HudSource {
   fleet: () => Ship[];
+  /** Ships the player commands directly, in numbered order (screen escorts excluded). */
+  units: () => Ship[];
+  formations: () => Formation[];
   selection: () => Ship[];
   primary: () => Ship;
   target: () => Ship | null;
@@ -69,7 +73,8 @@ export class Hud {
     $('clock').textContent = hms(this.world.time);
     $('log').innerHTML = this.logLines.map(l => `<div class="ln ${l.cls}"><span class="t">${hms(l.t)}</span>${l.text}</div>`).join('');
     const s = this.src.primary(), t = this.src.target(), sel = this.src.selection().filter(o => o.alive);
-    this.renderFleet(this.src.fleet(), sel, s);
+    this.renderFleet(sel, s);
+    this.renderFormation(sel, s);
     this.renderOwn(s);
     document.querySelectorAll<HTMLButtonElement>('[data-tel]').forEach(b => b.classList.toggle('on', +b.dataset.tel! === s.telegraph));
     document.querySelector('[data-cmd="hold"]')!.classList.toggle('on', sel.length > 0 && sel.every(o => o.holdFire));
@@ -78,19 +83,53 @@ export class Hud {
     this.renderAnalysis(s, t);
   }
 
-  /** Squadron list: every player ship, its state and whether it is selected. Rows select on press. */
-  private renderFleet(fleet: Ship[], sel: Ship[], primary: Ship) {
-    const rows = fleet.map((s, i) => {
+  /** Squadron list, grouped by formation: line ships, a summary of each screen, then independent ships. Rows select on press. */
+  private renderFleet(sel: Ship[], primary: Ship) {
+    const fleet = this.src.fleet(), units = this.src.units(), forms = this.src.formations(), all = this.world.formations;
+    const row = (s: Ship) => {
       const f = clamp(s.hp / s.c.hp, 0, 1), col = f > 0.6 ? css('--good') : f > 0.3 ? css('--accent') : css('--foe');
       const tgt = s.fc.target && s.fc.target.alive ? `→ ${s.fc.target.name}` : 'no target';
       const st = !s.alive ? (s.magazine ? 'blown up' : 'sinking') : `${(s.speed / KN).toFixed(0)} kn · ${s.holdFire ? '<span class="warn">hold fire</span>' : tgt}`;
       const cls = `unit${sel.includes(s) ? ' on' : ''}${s === primary && sel.length > 1 ? ' pri' : ''}${s.alive ? '' : ' dead'}`;
-      return `<button class="${cls}" data-pick="${i}"${s.alive ? '' : ' disabled'} title="${s.c.label}"><kbd>${i + 1}</kbd><span class="nm">${s.name.replace(/^USS /, '')}</span><span class="hpb"><i style="width:${Math.round(f * 100)}%;background:${col}"></i></span><span class="st">${st}</span></button>`;
-    }).join('');
+      const n = units.indexOf(s);
+      return `<button class="${cls}" data-pick="${fleet.indexOf(s)}"${s.alive ? '' : ' disabled'} title="${s.c.label}"><kbd>${n >= 0 && n < 9 ? n + 1 : ''}</kbd><span class="nm">${s.name.replace(/^USS /, '')}</span><span class="hpb"><i style="width:${Math.round(f * 100)}%;background:${col}"></i></span><span class="st">${st}</span></button>`;
+    };
+    let html = '';
+    for (const f of forms) {
+      const live = f.screen.filter(s => s.alive), hurt = live.filter(s => s.hp < s.c.hp * 0.6).length;
+      const classes = [...new Set(live.map(s => s.c.label.split('-')[0]))].map(c => `${live.filter(s => s.c.label.startsWith(c)).length} ${c}`).join(', ');
+      html += `<button class="fhead" data-fsel="${all.indexOf(f)}" title="Select the whole line">${FORMATION_LABEL[f.type]} · guide ${f.guide.name.replace(/^USS /, '')}</button>`;
+      html += f.line.map(row).join('');
+      if (f.screen.length) html += `<div class="screen"><span>Screen: ${live.length} DD${classes ? ` (${classes})` : ''}${hurt ? ` · <span class="warn">${hurt} damaged</span>` : ''}</span>${live.length ? `<button class="mini" data-fcmd="detach" data-f="${all.indexOf(f)}" title="Send one destroyer off on her own">Detach one</button>` : ''}</div>`;
+    }
+    const free = units.filter(s => !forms.some(f => f.has(s)));
+    if (free.length) html += (forms.length ? '<div class="fhead static">Independent</div>' : '') + free.map(row).join('');
     const note = sel.length > 1
       ? `<b>${sel.length} ships selected.</b> Orders go to all of them; the panels below show <b>${primary.name}</b>.`
-      : 'Click a ship or press its number to select it. <b>Shift</b> adds or removes, <b>Q</b> selects all, or drag a box on the map.';
-    $('fleet').innerHTML = `<div class="units">${rows}</div><div class="note">${note}</div>`;
+      : 'Click a ship or press its number to select it. <b>Shift</b> adds or removes, <b>Q</b> selects all, drag a box, or double-click a ship for her whole line.';
+    $('fleet').innerHTML = `<div class="units">${html}</div><div class="note">${note}</div>`;
+  }
+
+  /** Formation panel: the primary's formation (or how to make one), with lit buttons for its type and turn mode. */
+  private renderFormation(sel: Ship[], primary: Ship) {
+    const f = this.world.formationOf(primary);
+    document.querySelectorAll<HTMLButtonElement>('[data-form]').forEach(b => b.classList.toggle('on', !!f && b.dataset.form === f.type));
+    const tb = document.querySelector<HTMLButtonElement>('[data-fcmd="turn"]');
+    if (tb) tb.firstElementChild!.textContent = f && f.turn === 'together' ? 'Turn together' : 'Turn in succession';
+    const freeDD = sel.filter(s => s.c.type === 'DD' && !this.world.formationOf(s));
+    const rejoin = freeDD.length && this.world.formations.some(o => o.guide.side === 'player') ? `<button class="mini" data-fcmd="rejoin">Rejoin screen</button>` : '';
+    if (!f) { $('formInfo').innerHTML = `<div class="note">${primary.name} is steaming independently. Select two or more ships and choose a formation; destroyers go to the screen.</div>${rejoin}`; return; }
+    const guideSel = sel.includes(f.guide);
+    const role = f.guide === primary ? 'guide' : f.screen.includes(primary) ? 'screen' : `${f.line.indexOf(primary) + 1} in line`;
+    const lag = f.members.filter(s => s !== f.guide && s.alive && f.stationError(s) > 0.5 * f.interval).length;
+    const heavy = f.line.some(s => s.c.type !== 'DD');
+    $('formInfo').innerHTML = `<dl class="stats">
+        <dt>${FORMATION_LABEL[f.type]}</dt><dd>${primary.name.replace(/^USS /, '')}: ${role}</dd>
+        <dt>Formation speed</dt><dd>${(f.guide.speed / KN).toFixed(1)} kn · max ${(f.maxSpeed / KN).toFixed(1)}</dd>
+        <dt>Standard distance</dt><dd>${heavy ? '1,000' : '500'} yd</dd>
+        <dt>Off station</dt><dd class="${lag ? 'warn' : ''}">${lag ? `${lag} closing up` : 'none'}</dd></dl>
+      <div class="note">${guideSel ? (f.turn === 'succession' && f.type === 'column' ? 'Helm orders turn the column in succession: each ship turns where the guide turned.' : 'Helm orders turn every ship together; a column becomes a line of bearing until you re-form.')
+        : `Movement orders to ${primary.name} take her out of the formation. Select the guide to manoeuvre it.`}</div>${rejoin}`;
   }
 
   /** Radar chip: fitted or not, and how long until a knocked-out set is repaired. */
@@ -177,7 +216,7 @@ export class Hud {
     const rows = s.turrets.map((tu, i) => {
       const rel = wrap(bearing(s.x, s.z, t.x, t.z) - s.heading);
       const bears = canBear(tu.def, rel);
-      const st = !tu.alive ? '<span class="bad">destroyed</span>' : !tu.loaded ? '<span class="bad">no rounds</span>' : tu.jam > 0 ? `<span class="warn">jammed ${Math.ceil(tu.jam)} s</span>` : !bears ? '<span class="warn">masked</span>' : tu.reload > 0 ? `loading ${Math.ceil(tu.reload)} s` : '<span class="ok">ready</span>';
+      const st = !tu.alive ? '<span class="bad">destroyed</span>' : !tu.loaded ? '<span class="bad">no rounds</span>' : tu.jam > 0 ? `<span class="warn">jammed ${Math.ceil(tu.jam)} s</span>` : !bears ? '<span class="warn">masked</span>' : tu.blocked ? `<span class="warn" title="A friendly ship is in the line of fire">blocked: ${tu.blocked.name.replace(/^USS /, '')}</span>` : tu.reload > 0 ? `loading ${Math.ceil(tu.reload)} s` : '<span class="ok">ready</span>';
       const fill = tu.alive ? 1 - tu.reload / s.c.gun.reload : 0;
       const ld = tu.alive && tu.loaded ? `<span class="ld${tu.loaded !== s.shellType ? ' warn' : ''}" title="loaded${tu.hoist ? `; ${SHELL_LABEL[tu.hoist]} still in the hoist` : ''}">${SHELL_LABEL[tu.loaded]}${tu.hoist ? '+' : ''}</span>` : '<span class="ld">—</span>';
       return `<div class="tur"><span>Turret ${i + 1}</span><div class="rl"><i style="width:${Math.round(clamp(fill, 0, 1) * 100)}%"></i></div>${ld}<span class="st">${st}</span></div>`;

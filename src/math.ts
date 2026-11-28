@@ -39,3 +39,18 @@ export const hms = (t: number) => {
   return [Math.floor(t / 3600), Math.floor(t / 60) % 60, t % 60].map(v => String(v).padStart(2, '0')).join(':');
 };
 export const km = (m: number) => (m / 1000).toFixed(m < 10000 ? 1 : 0) + ' km';
+
+/** Distance from point (px, pz) to the segment a-b. */
+export function pointSegDist(px: number, pz: number, ax: number, az: number, bx: number, bz: number) {
+  const dx = bx - ax, dz = bz - az, l2 = dx * dx + dz * dz;
+  const t = l2 > 0 ? clamp(((px - ax) * dx + (pz - az) * dz) / l2, 0, 1) : 0;
+  return Math.hypot(px - ax - t * dx, pz - az - t * dz);
+}
+
+/** Shortest distance between segments a-b and c-d (0 if they cross). */
+export function segSegDist(ax: number, az: number, bx: number, bz: number, cx: number, cz: number, dx: number, dz: number) {
+  const cross = (ox: number, oz: number, px: number, pz: number, qx: number, qz: number) => (px - ox) * (qz - oz) - (pz - oz) * (qx - ox);
+  const d1 = cross(ax, az, bx, bz, cx, cz), d2 = cross(ax, az, bx, bz, dx, dz), d3 = cross(cx, cz, dx, dz, ax, az), d4 = cross(cx, cz, dx, dz, bx, bz);
+  if (d1 * d2 < 0 && d3 * d4 < 0) return 0;
+  return Math.min(pointSegDist(ax, az, cx, cz, dx, dz), pointSegDist(bx, bz, cx, cz, dx, dz), pointSegDist(cx, cz, ax, az, bx, bz), pointSegDist(dx, dz, ax, az, bx, bz));
+}

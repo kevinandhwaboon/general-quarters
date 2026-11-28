@@ -85,7 +85,7 @@ h2{font:700 25px/1.02 var(--f-display);letter-spacing:.02em;margin:2px 0 1px}
 .qbar{height:6px;background:#1a252e;position:relative;margin:4px 0 2px}
 .qbar i{position:absolute;inset:0 auto 0 0;background:var(--accent)}
 .turrets{display:flex;flex-direction:column;gap:3px;margin:8px 0}
-.tur{display:grid;grid-template-columns:58px minmax(0,1fr) 26px 92px;gap:8px;align-items:center;font-size:12px}
+.tur{display:grid;grid-template-columns:58px minmax(0,1fr) 26px minmax(92px,auto);gap:8px;align-items:center;font-size:12px}
 .tur .ld{font:600 11px var(--f-mono);color:var(--muted)} .tur .ld.warn{color:var(--accent)}
 #fc .sub{font:600 11px/1 var(--f-display);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:12px 0 4px;padding-top:8px;border-top:1px solid var(--line)}
 .ammo{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:0 0 8px}
@@ -116,7 +116,14 @@ h2{font:700 25px/1.02 var(--f-display);letter-spacing:.02em;margin:2px 0 1px}
 .unit .hpb{height:5px;background:#1a252e;position:relative}
 .unit .hpb i{position:absolute;inset:0 auto 0 0}
 .unit .st{font:500 11px var(--f-mono);color:var(--muted);white-space:nowrap}
-.unit:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.fhead{display:block;width:100%;text-align:left;font:600 11px/1 var(--f-display);letter-spacing:.1em;text-transform:uppercase;color:var(--friend);background:none;border:0;padding:8px 0 3px;cursor:pointer}
+.fhead:hover{color:var(--text)} .fhead.static{color:var(--muted);cursor:default}
+.fhead:first-child{padding-top:0}
+.screen{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;color:var(--muted);padding:4px 8px 2px;border-left:2px solid var(--line);margin-left:2px}
+.mini{font:600 11px/1 var(--f-display);letter-spacing:.06em;text-transform:uppercase;background:var(--panel-2);border:1px solid var(--line);color:var(--text);padding:5px 7px;cursor:pointer;white-space:nowrap}
+.mini:hover{border-color:var(--muted)}
+#formInfo .mini{margin-top:6px}
+.fhead:focus-visible,.mini:focus-visible,.unit:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .note{font-size:11.5px;color:var(--muted);margin:6px 0 2px;line-height:1.45}
 @media (max-width:820px){
   body{overflow:auto}
@@ -133,7 +140,7 @@ h2{font:700 25px/1.02 var(--f-display);letter-spacing:.02em;margin:2px 0 1px}
 <body>
 <div id="app">
   <header id="top">
-    <div class="brand"><div class="op">Squadron trial</div><div class="sub">Washington and South Dakota vs Kirishima · proof of concept</div></div>
+    <div class="brand"><div class="op">Squadron trial</div><div class="sub">Washington, South Dakota and screen vs Kirishima · proof of concept</div></div>
     <div class="row"><span id="clock">00:00:00</span>
       <div class="seg" id="speed">
         <button class="tbtn" data-sp="0" title="Pause (Space)">II</button>
@@ -160,7 +167,7 @@ h2{font:700 25px/1.02 var(--f-display);letter-spacing:.02em;margin:2px 0 1px}
       <canvas id="gl"></canvas>
       <canvas id="ov"></canvas>
       <div class="tag">Proof of concept</div>
-      <div id="hint"><b>Click</b> or <b>drag a box</b> to select · <b>1–9</b>, <b>Q</b> all<br><b>Click</b> the enemy to engage · <b>right-click</b> water to steer<br><b>W/S</b> speed · <b>A/D</b> course ±10° · <b>H</b> hold fire<br><b>Scroll</b> zoom · <b>right-drag</b> pan · <b>Space</b> pause</div>
+      <div id="hint"><b>Click</b> or <b>drag a box</b> to select · <b>1–9</b>, <b>Q</b> all<br><b>Click</b> the enemy to engage · <b>right-click</b> water to steer<br><b>W/S</b> speed · <b>A/D</b> course ±10° · <b>H</b> hold fire<br><b>C/B/O</b> column, bearing, circle · <b>V</b> turn mode<br><b>Scroll</b> zoom · <b>right-drag</b> pan · <b>Space</b> pause</div>
       <div id="log"></div>
       <div id="viewbar">
         <button class="vb on" data-view="all">All ships</button>
@@ -185,6 +192,19 @@ h2{font:700 25px/1.02 var(--f-display);letter-spacing:.02em;margin:2px 0 1px}
           <button class="cmd" data-cmd="hold">Hold fire <kbd>H</kbd></button>
           <button class="cmd" data-cmd="beam">Turn to beam</button>
         </div>
+      </details>
+      <details open data-k="form"><summary>Formation</summary>
+        <div class="grid g3">
+          <button class="cmd" data-form="column" title="Line ahead: every gun bears on the beam">Column <kbd>C</kbd></button>
+          <button class="cmd" data-form="bearing" title="Line of bearing: ships stepped back on the side away from the enemy">Bearing <kbd>B</kbd></button>
+          <button class="cmd" data-form="circle" title="Circular disposition: the guide at the centre, heavy ships on an inner ring, the screen outside">Circle <kbd>O</kbd></button>
+        </div>
+        <div class="grid g3">
+          <button class="cmd" data-fcmd="turn" title="How helm orders turn the formation"><span>Turn in succession</span> <kbd>V</kbd></button>
+          <button class="cmd" data-fcmd="reform" title="Stations swing round to the guide's present course">Re-form <kbd>R</kbd></button>
+          <button class="cmd" data-fcmd="break" title="Ships steam independently">Break <kbd>X</kbd></button>
+        </div>
+        <div id="formInfo"></div>
       </details>
       <details open data-k="fc"><summary>Fire control</summary><div id="fc"></div></details>
       <details open data-k="analysis"><summary>Target analysis</summary><div id="tgtHead"></div><canvas id="aspect" width="600" height="300"></canvas><div id="tgtCalc"></div></details>

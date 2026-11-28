@@ -24,6 +24,8 @@ export interface TurretState {
   loaded: ShellType | null;
   /** Old-type rounds still in the hoist after a change of shell type; fired before the new type. */
   hoist: ShellType | null;
+  /** Friendly ship in this turret's line of fire (it holds fire), or null. */
+  blocked: Ship | null;
 }
 
 /** A secondary mount covers its own side, from 20 degrees off the bow to 20 degrees off the stern. */
@@ -157,6 +159,8 @@ export class Ship {
   telegraph = 4;
   course: number | null = null;
   waypoint: { x: number; z: number } | null = null;
+  /** Exact speed ordered by a formation (m/s), overriding the telegraph; null when steaming independently. */
+  speedOrder: number | null = null;
   hp: number;
   fires = 0;
   flooding = 0;
@@ -197,11 +201,13 @@ export class Ship {
     this.radarSet = c.radar ? { status: 'ok', repair: 0 } : null;
     this.mounts = buildMounts(c);
     this.ammo = { ...c.ammo };
-    this.turrets = c.turrets.map(def => ({ def, rel: restAngle(def), reload: 0, alive: true, jam: 0, loaded: 'ap' as ShellType, hoist: null }));
+    this.turrets = c.turrets.map(def => ({ def, rel: restAngle(def), reload: 0, alive: true, jam: 0, loaded: 'ap' as ShellType, hoist: null, blocked: null }));
     this.fc = new FireControl(this);
     this.secFc = new FireControl(this, 'sec');
     this.secAmmo = c.sec?.ammo ?? 0;
     this.course = this.heading;
+    // destroyers' 5-inch guns cannot hurt armour, so they start with HE
+    if (c.type === 'DD') this.loadAll('he');
   }
 
   /** Radar fitted and working. */
@@ -214,6 +220,8 @@ export class Ship {
   }
 
   get maxSpeed() { return this.c.maxKn * KN; }
+  /** Best speed the ship can make now, after machinery damage and flooding. */
+  get achievableSpeed() { return this.maxSpeed * this.engines * (1 - Math.min(0.6, this.flooding * 0.05)); }
 
   /**
    * Order a change of shell type. Each turret still fires the round in its guns and the one already
@@ -262,8 +270,7 @@ export class Ship {
     this.turnRate += (this.rudder * maxRate - this.turnRate) * Math.min(1, dt * 0.5);
     this.heading = wrap(this.heading + this.turnRate * dt);
 
-    const floodLoss = Math.min(0.6, this.flooding * 0.05);
-    const target = TELEGRAPH[this.telegraph].f * this.maxSpeed * this.engines * (1 - floodLoss) * (1 - 0.22 * Math.abs(this.rudder));
+    const target = (this.speedOrder !== null ? Math.min(this.speedOrder, this.achievableSpeed) : TELEGRAPH[this.telegraph].f * this.achievableSpeed) * (1 - 0.22 * Math.abs(this.rudder));
     this.speed += clamp(target - this.speed, -this.c.accel * 1.5 * dt, this.c.accel * dt);
     const [dx, dz] = dir(this.heading);
     this.x += dx * this.speed * dt; this.z += dz * this.speed * dt;

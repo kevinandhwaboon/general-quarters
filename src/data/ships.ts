@@ -167,6 +167,40 @@ export const SOUTH_DAKOTA: ShipClass = {
   catapults: [{ x: -91, z: 7, r: 0.35 }, { x: -91, z: -7, r: -0.35 }],
 };
 
+/**
+ * Fletcher-class destroyer, late 1942. Five single 5-inch/38 mounts under a Mk 37 director with
+ * radar; half-inch plating over the machinery and little else. Torpedoes are not modelled yet.
+ * AA fit and magazine loadout are placeholders.
+ */
+export const FLETCHER: ShipClass = {
+  id: 'fletcher', label: 'Fletcher-class destroyer', nation: 'usn', type: 'DD',
+  L: 115, B: 12, fb: 4.2, sheer: 0.5, fine: 0.5, tumble: 0.96,
+  maxKn: 36.5, tacticalDiameter: 700, accel: 0.12, hp: 14,
+  armour: { belt: 13, beltIncl: 0, beltTop: 1.5, beltBottom: -2, citadel: [-25, 25], upperSide: 13, deck: 13, ends: 8, turretFace: 6, turretRoof: 6, conning: 10, superstructure: 6 },
+  gun: GUN_5IN_38_MK12,
+  ammo: { ap: 250, he: 1500 }, // 5 guns, about 350 rounds per gun: semi-armour-piercing and AA common
+  turrets: [
+    { x: 40, h: 5.6, fwd: true, guns: 1, s: 0.55, maxRel: 150 },
+    { x: 31, h: 7.4, fwd: true, guns: 1, s: 0.55, maxRel: 145 },
+    { x: -22, h: 8.6, fwd: false, guns: 1, s: 0.55, minRel: 40 },
+    { x: -34, h: 7.2, fwd: false, guns: 1, s: 0.55, minRel: 35 },
+    { x: -46, h: 4.6, fwd: false, guns: 1, s: 0.55, minRel: 30 },
+  ],
+  fc: { rangeErr0: 0.012, spotKeep: 0.5, label: 'Mk 37 director + Mk 4 radar' },
+  crew: 'Trained, radar-equipped',
+  boxes: [
+    { x: 20, l: 13, w: 9, y0: 0, y1: 3 },
+    { x: 21, l: 8, w: 8, y0: 3, y1: 6, win: true, wing: 1.5 },
+    { x: 0, l: 22, w: 7, y0: 0, y1: 2.4 },
+    { x: -30, l: 16, w: 7, y0: 0, y1: 2.6, win: true },
+  ],
+  funnels: [{ x: 7, r: 1.7, h: 6.5, y0: 2.4, rake: 4 }, { x: -6, r: 1.7, h: 6, y0: 2.4, rake: 4 }],
+  masts: [{ x: 16, h: 14, k: 'pole', y0: 6 }],
+  radar: true,
+  // late 1942: a twin 40 mm aft and four 20 mm (approximate; early ships had a quadruple 1.1-inch)
+  aa: [{ k: 'medium', label: '40 mm twin', x: [-14] }, { k: 'light', label: '20 mm', x: [14, -40] }],
+};
+
 /** Kongō class after reconstruction, as Kirishima in November 1942. */
 export const KONGO: ShipClass = {
   id: 'kongo', label: 'Kongō-class fast battleship', nation: 'ijn', type: 'BB',
@@ -196,4 +230,4 @@ export const KONGO: ShipClass = {
   catapults: [{ x: -92, z: 0, r: 0.3 }],
 };
 
-export const CLASSES: Record<string, ShipClass> = { northcarolina: NORTH_CAROLINA, southdakota: SOUTH_DAKOTA, kongo: KONGO };
+export const CLASSES: Record<string, ShipClass> = { northcarolina: NORTH_CAROLINA, southdakota: SOUTH_DAKOTA, fletcher: FLETCHER, kongo: KONGO };

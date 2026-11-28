@@ -40,6 +40,18 @@ export class Overlay {
       const rp = r.project(s.x + toGame(gun.maxRangeKm * 1000) * Math.cos(-0.9), s.z + toGame(gun.maxRangeKm * 1000) * Math.sin(-0.9));
       if (rp.ok) this.label(`${gun.name} · max range ${gun.maxRangeKm} km`, rp.x, rp.y, 'rgba(242,178,62,.7)', '500 11px "Barlow Condensed", sans-serif');
     }
+    // stations of selected formations: a small diamond where each ship should be, joined to her if she is off station
+    for (const f of this.world.formations) {
+      if (!selection.includes(f.guide)) continue;
+      for (const m of f.members) {
+        if (m === f.guide || !m.alive) continue;
+        const st = f.station(m), q = r.project(st.x, st.z), p = r.project(m.x, m.z);
+        if (!q.ok) continue;
+        g.strokeStyle = 'rgba(71,215,193,.55)'; g.lineWidth = 1.2;
+        g.beginPath(); g.moveTo(q.x, q.y - 5); g.lineTo(q.x + 5, q.y); g.lineTo(q.x, q.y + 5); g.lineTo(q.x - 5, q.y); g.closePath(); g.stroke();
+        if (Math.hypot(st.x - m.x, st.z - m.z) > 0.25 * f.interval) { g.setLineDash([2, 4]); g.beginPath(); g.moveTo(p.x, p.y); g.lineTo(q.x, q.y); g.stroke(); g.setLineDash([]); }
+      }
+    }
     for (const s of selection) {
       if (!s.alive) continue;
       const isPrimary = s === primary;

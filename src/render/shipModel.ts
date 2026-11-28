@@ -72,10 +72,10 @@ export function buildShipModel(c: ShipClass): ShipModel {
   // fire-control director on top of the bridge
   if (c.nation === 'usn') {
     const top = c.boxes.reduce((a, b) => (b.x > 0 && b.y1 > a.y1 ? b : a), c.boxes[0]);
-    const y = dAt(top.x) + top.y1;
-    k.add(BOX, p.sup, [top.x, y + 1.6, 0], 0, [5, 3.2, 5]);
-    k.add(BOX, p.dark, [top.x - 0.5, y + 2.6, 0], 0, [1.2, 0.8, 9]);
-    k.add(BOX, p.mast, [top.x, y + 3.8, 0], 0, [1.4, 1.6, 4.5]);
+    const y = dAt(top.x) + top.y1, d = Math.min(1, c.B / 24); // destroyers carry a smaller director
+    k.add(BOX, p.sup, [top.x, y + 1.6 * d, 0], 0, [5 * d, 3.2 * d, 5 * d]);
+    k.add(BOX, p.dark, [top.x - 0.5 * d, y + 2.6 * d, 0], 0, [1.2 * d, 0.8 * d, 9 * d]);
+    k.add(BOX, p.mast, [top.x, y + 3.8 * d, 0], 0, [1.4 * d, 1.6 * d, 4.5 * d]);
   }
   for (const f of c.funnels) {
     const y0 = dAt(f.x) + (f.y0 ?? 1.5), rk = (f.rake ?? 0) * DEG;

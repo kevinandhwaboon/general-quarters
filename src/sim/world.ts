@@ -1,7 +1,8 @@
 import { FLIGHT_TIME_SCALE, toReal } from '../config';
 import { GunSpec, SHELL_LABEL, ShellType } from '../data/guns';
-import { bearing, clamp, DEG, dir, gauss, interp, rnd, wrap } from '../math';
+import { bearing, clamp, DEG, dir, gauss, interp, rnd, segSegDist, wrap } from '../math';
 import { hitTest, HitResult, Impact, OUTCOME_LABEL, resolveHit, Zone, ZONE_LABEL } from './combat';
+import { Formation } from './formation';
 import { canBear, FireControl, Mount, mountBears, restAngle, Ship } from './ship';
 
 export interface Shell {
@@ -37,8 +38,12 @@ export type SimEvent =
 
 export type EnemyMode = 'idle' | 'steam' | 'zigzag';
 
+/** Clearance (game m) beyond a friendly ship's beam inside which a gun will not fire across her. */
+const MASK_MARGIN = 30;
+
 export class World {
   ships: Ship[] = [];
+  formations: Formation[] = [];
   shells: Shell[] = [];
   salvos = new Map<number, Salvo>();
   events: SimEvent[] = [];
@@ -52,8 +57,11 @@ export class World {
   add(s: Ship) { this.ships.push(s); return s; }
   log(text: string, cls: '' | 'hit' | 'crit' | 'own' = '') { this.events.push({ type: 'log', text, cls }); }
 
+  formationOf(s: Ship) { return this.formations.find(f => f.has(s)) ?? null; }
+
   step(dt: number) {
     this.time += dt;
+    this.formationStep();
     for (const s of this.ships) {
       if (s.side === 'enemy') this.enemyBrain(s, dt);
       s.update(dt);
@@ -66,6 +74,31 @@ export class World {
       sh.t += dt;
       if (sh.t >= sh.T) { this.shells.splice(i, 1); this.land(sh); }
     }
+  }
+
+  /** Formations keep station; screens fire at will at the nearest enemy in range, holding fire when the guide does. */
+  private formationStep() {
+    for (const f of this.formations) {
+      const own = (f.line[0] ?? f.screen[0])?.side === 'player';
+      for (const text of f.update()) this.log(text, own ? 'own' : '');
+    }
+    this.formations = this.formations.filter(f => { if (f.empty) { f.dissolve(); return false; } return true; });
+    for (const f of this.formations) for (const s of f.screen) {
+      if (!s.alive) continue;
+      s.holdFire = f.guide.holdFire;
+      const inRange = (t: Ship | null) => !!t && t.alive && toReal(Math.hypot(t.x - s.x, t.z - s.z)) / 1000 <= s.c.gun.maxRangeKm;
+      if (!inRange(s.fc.target)) { const t = this.nearestEnemy(s); s.fc.assign(inRange(t) ? t : null); }
+    }
+  }
+
+  /** A friendly ship lying across the line of fire from (x0, z0) to (x1, z1), or null. */
+  fouled(s: Ship, x0: number, z0: number, x1: number, z1: number): Ship | null {
+    for (const o of this.ships) {
+      if (o === s || o.side !== s.side || (!o.alive && o.sinkT > 60)) continue;
+      const [hx, hz] = dir(o.heading), h = o.c.L / 2;
+      if (segSegDist(x0, z0, x1, z1, o.x + hx * h, o.z + hz * h, o.x - hx * h, o.z - hz * h) < o.c.B / 2 + MASK_MARGIN) return o;
+    }
+    return null;
   }
 
   /** Nearest living ship of the other side, or null. */
@@ -150,7 +183,9 @@ export class World {
     s.secFc.update(dt);
     const aim = this.aimPoint(s, t, s.secFc, sec.gun);
     const rel = wrap(aim.b - s.heading);
-    const bearingMounts = s.mounts.filter(m => (m.kind === 'sec' || m.kind === 'dp') && m.status === 'ok' && mountBears(m, rel));
+    const [hx, hz] = dir(s.heading);
+    const clear = (m: Mount) => !this.fouled(s, s.x + hx * m.x - hz * s.c.B / 2 * m.side, s.z + hz * m.x + hx * s.c.B / 2 * m.side, aim.x, aim.z);
+    const bearingMounts = s.mounts.filter(m => (m.kind === 'sec' || m.kind === 'dp') && m.status === 'ok' && mountBears(m, rel) && clear(m));
     const ready = bearingMounts.filter(m => m.reload <= 0);
     if (ready.length === 0) { s.secWait = 0; return; }
     s.secWait += dt;
@@ -189,6 +224,7 @@ export class World {
     const aim = t ? this.aimPoint(s, t) : null;
     const inRange = !!aim && aim.realKm <= g.maxRangeKm;
     let bearingCount = 0, ready: number[] = [];
+    const [hx, hz] = dir(s.heading);
     s.turrets.forEach((tu, i) => {
       tu.reload = Math.max(0, tu.reload - dt);
       if (!tu.alive) return;
@@ -203,7 +239,8 @@ export class World {
       const max = g.traverseDegS * DEG * dt * (tu.jam > 0 ? 0 : 1);
       const next = cur + clamp(goal - cur, -max, max);
       tu.rel = tu.def.fwd ? next : wrap(next + Math.PI);
-      if (bears && inRange) {
+      tu.blocked = bears && inRange && aim ? this.fouled(s, s.x + hx * tu.def.x, s.z + hz * tu.def.x, aim.x, aim.z) : null;
+      if (bears && inRange && !tu.blocked) {
         bearingCount++;
         if (Math.abs(goal - next) < 1.2 * DEG && tu.reload <= 0 && tu.jam <= 0 && tu.loaded) ready.push(i);
       }
@@ -258,9 +295,10 @@ export class World {
       this.events.push({ type: 'hit', shell: sh, result: res });
       if (sv) sv.hits++;
       const who = sh.shooter.side === 'player' ? 'hit' : 'crit';
-      // secondary hits are frequent and small: log only those that do something
-      if (sh.turret >= 0 || res.notes.length) {
-        const gun = sh.turret >= 0 ? SHELL_LABEL[sh.kind] : `${Math.round(sh.gun.caliberMm / 25.4)}-inch`;
+      // hits from guns under 8 inches are frequent and small: log only those that do something
+      const heavy = sh.turret >= 0 && sh.gun.caliberMm >= 200;
+      if (heavy || res.notes.length) {
+        const gun = heavy ? SHELL_LABEL[sh.kind] : `${Math.round(sh.gun.caliberMm / 25.4)}-inch`;
         const text = `${sh.shooter.name.replace('USS ', '')} → ${t.name.replace('USS ', '')}: ${gun} · ${ZONE_LABEL[imp.zone as Zone]} · ${OUTCOME_LABEL[res.outcome]}${res.notes.length ? ' · ' + res.notes.join(', ') : ''}`;
         this.log(text, res.critical ? 'crit' : who === 'hit' ? 'hit' : '');
       }
@@ -319,7 +357,7 @@ export class World {
         if (s.shellType === 'he' ? eff <= g.he.penMm : interp(g.penNormal, aim.realKm) >= eff && imp.obliquity < 65 * DEG) pens++;
       }
     }
-    const guns = s.turrets.reduce((a, tu) => a + (tu.alive && tu.loaded && canBear(tu.def, wrap(aim.b - s.heading)) ? Math.min(tu.def.guns, s.ammo[tu.loaded]) : 0), 0);
+    const guns = s.turrets.reduce((a, tu) => a + (tu.alive && tu.loaded && !tu.blocked && canBear(tu.def, wrap(aim.b - s.heading)) ? Math.min(tu.def.guns, s.ammo[tu.loaded]) : 0), 0);
     const total = s.turrets.reduce((a, tu) => a + tu.def.guns, 0);
     return { pHit: hits / samples, pPen: pens / samples, zones, hits, guns, total, aim, fall };
   }
