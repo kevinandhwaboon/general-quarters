@@ -14,6 +14,7 @@ A real-time strategy game about **Second World War naval combat in the Pacific**
 | Topic | Decision |
 |---|---|
 | Theatre | Pacific |
+| Focus | **Carriers first.** Carrier battles are the main interest; surface actions support them |
 | Warfare | Surface ships, **carriers and aircraft**, **submarines** |
 | Scenarios | Recreate historical engagements. Forces start already deployed; **no base building or economy** |
 | Victory | **Fixed victory conditions** per scenario, based on objectives (protect or destroy, bombard, break through, survive or delay, find and strike first). A crippled ship counts toward victory. Time limits such as "clear the area before dawn". Withdrawing through an exit can earn a partial win. The historical result is shown on the results screen for comparison |
@@ -21,6 +22,10 @@ A real-time strategy game about **Second World War naval combat in the Pacific**
 | Selection (implemented) | RTS-style: click a ship, **Shift** adds or removes, **drag a box** with the left mouse button, number keys **1–9** pick a ship, **Q** selects all. Every order (helm, engage, shell type, hold fire, move) goes to **all selected ships**; the panels show the first one (the primary). A move order keeps the group's shape around the clicked point until formations exist. Right- or middle-drag pans (left-drag is the box); on touch screens drag pans and a long press orders a move |
 | Formation spacing | **Half-compressed, set in ship lengths**: about 2.5 ship lengths bow to bow within a formation (about 550 game metres for a battleship), so ships are drawn at about 2× and a four-ship column is about 1.6 km long against 4–6 km ranges. The UI shows doctrine figures (e.g. "standard distance 1,000 yd"). Distances *between* groups (screens, separate divisions) are tactical and compress like range |
 | Masking | Ships cannot fire through friendly hulls. Formation choice therefore matters: line abreast masks the beam, bunching silences guns |
+| Escorts | **Screens.** Destroyers belong to their group's screen: real ships in the simulation (they fire, take hits, sink) that the game stations around the group and that fire at will. They are not selectable by default; the player can **detach** one for a job (picket, rescue, torpedo attack) and send it back to **rejoin**. Escorts stay at historical numbers; scenarios trim only ships that do nothing |
+| Formation types | **Circle** (circular AA disposition: the guide, usually a carrier, at the centre, heavy ships on an inner ring, the screen on an outer ring; the default for a group with a carrier), **column** (surface actions, narrow waters) and **line of bearing** (what a turn together produces). Line abreast dropped. Turns **in succession** or **together**, plus **re-form** |
+| Command level | Task groups. At strategic zoom the player orders task groups as single symbols; zoomed in, individual ships |
+| Fire distribution | **Later**, with the surface-warfare work. Until then: all on one target, or each ship on the nearest enemy |
 | Orders inside a formation | Allowed. Fire orders (target, shell type, hold fire) apply without leaving the formation; a movement order (helm, move) takes that ship out of the formation, and the log says so |
 | Gunnery | RA2-simple: select a ship, click a target. **The player never aims.** Accuracy and damage depend on the ship, range and the **angles** of firer and target. Positioning is the skill; going broadside is a risk/reward choice |
 | Fog of war | What your ships would know, like RTS fog but about **contacts, not terrain**: identified, classified (silhouette only), detected (unknown blip with an uncertainty area), lost (last-seen marker). Sensors: visual, night, radar (by nation and year), sonar, aircraft. Tactical vision is shared instantly; long-range reports (scout planes, coastwatchers) arrive late and may be wrong. The enemy AI plays under the same fog |
@@ -74,24 +79,23 @@ See `README.md` for file pointers.
 
 | Scenario | Why | Notes |
 |---|---|---|
-| Naval Battle of Guadalcanal, 14–15 Nov 1942 | **Recommended first scenario**: Washington and South Dakota against Kirishima, cruisers and destroyers | Night action; extends the proof of concept |
+| Naval Battle of Guadalcanal, 14–15 Nov 1942 | Washington and South Dakota against Kirishima, cruisers and destroyers | Night action; extends the proof of concept. First **surface** scenario, after the carrier work |
 | Savo Island, Aug 1942 | Compact night action, fog of war, torpedoes | Mockup exists |
 | Surigao Strait, Oct 1944 | Crossing the T, torpedo runs | |
 | Samar, Oct 1944 | Delaying action | |
 | ~~Pearl Harbor, Dec 1941~~ | Was only a test of the carrier layer | Mockup exists. **Shelved**; not a planned scenario |
-| Midway, Coral Sea | Carrier against carrier | Needs the air and operational layer |
+| **Coral Sea or Midway** | Carrier against carrier. **The first scenario** (carriers come first) | Needs the air and operational layer |
 
 ## 7. Roadmap
 
 0. ✅ **Gunnery proof of concept**: Washington vs Kirishima, one against one.
-1. **Squadrons and formations** (in progress): several ships per side, box selection, column, line abreast and line of bearing, turning in succession vs turning together, fire distribution, crossing the T. Add cruiser and destroyer classes.
+1. **Squadrons and formations** (in progress, kept lean):
    - ✅ Several ships per side, multi-selection and group orders; squadron panel; South Dakota class (BB-57) added; enemy ships engage the nearest target and zig-zag independently.
-   - Next: fix the moving-target hit-rate issue (§4), cruiser and destroyer classes, formation orders, fire distribution.
-2. **Enemy captain AI**: manoeuvre to keep guns bearing, distribute fire, break off when damaged.
-3. **Torpedoes and destroyers**: Long Lance spreads, combing tracks, screens.
-4. **Visibility and night**: contact levels, searchlights, star shells, radar against optics, smoke.
-5. **First historical scenario** (Guadalcanal, November 1942) with victory conditions and a results screen.
-6. **Carriers and the air layer** (Midway, Coral Sea).
+   - Next: formations (circle, column, line of bearing; turning in succession or together; re-form; station-keeping; falling out of line), masking, destroyer screens with detach and rejoin, a destroyer class.
+2. **Carriers and the air layer** (moved up): carrier classes, air groups, strikes, scouting, carrier AA, task groups at strategic zoom.
+3. **Visibility and fog of war**: contact levels, scout reports that arrive late or wrong, radar against optics; night, searchlights, star shells and smoke for the surface actions.
+4. **First scenario: Coral Sea or Midway**, with victory conditions and a results screen.
+5. **Surface warfare**: enemy captain AI, fire distribution, torpedoes and destroyer actions, cruiser classes, the moving-target hit-rate fix (§4), then Guadalcanal (November 1942).
 
 Alongside: unit tests for the simulation, a seeded random-number generator for replays, and checking gun and armour data against sources.
 
@@ -106,4 +110,4 @@ Alongside: unit tests for the simulation, a seeded random-number generator for r
 
 - When to schedule shell types, finite ammunition, system damage, and automatic secondary and AA fire (likely alongside squadrons, before torpedoes; AA needs aircraft first).
 - Sources for per-class magazine loadouts (rounds per gun by shell type).
-- Formations: whether fire distribution ships with formations or after; how escorts are handled when the focus is carriers (abstracted screens, see the formations discussion).
+- Coral Sea or Midway as the first scenario.
