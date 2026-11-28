@@ -528,7 +528,7 @@ export class AirOps {
       if (Math.random() < p) {
         st.bombHits++;
         const r = resolveBomb(t, w);
-        f.results.hits++; r.notes.forEach(n => f.results.notes.add(n));
+        f.results.hits++; r.notes.forEach(n => { const m = /^(\d+) aircraft destroyed$/.exec(n); f.results.notes.add(m ? `${m[1]} aircraft destroyed#${f.results.hits}` : n); });
         this.w.events.push({ type: 'bomb', ship: t, hit: r, x: t.x, z: t.z });
         this.afterHit(t);
       } else {
@@ -550,7 +550,11 @@ export class AirOps {
     const r = f.results, own = f.side === 'player';
     if (!own && !this.w.visibleTo('player', t) && t.side !== 'player') return;
     const what = `${f.label} attacks ${t.name}: ${r.hits} hit${r.hits === 1 ? '' : 's'} of ${r.hits + r.misses}`;
-    this.w.log(`${what}${r.notes.size ? ' · ' + [...r.notes].join(', ') : ''}`, r.hits ? (own ? 'hit' : 'crit') : '');
+    // add up the aircraft destroyed aboard rather than listing each hit's count
+    let planes = 0;
+    const notes = [...r.notes].filter(n => { const m = /^(\d+) aircraft destroyed(#\d+)?$/.exec(n); if (m) { planes += +m[1]; return false; } return true; });
+    if (planes) notes.push(`${planes} aircraft destroyed aboard`);
+    this.w.log(`${what}${notes.length ? ' · ' + notes.join(', ') : ''}`, r.hits ? (own ? 'hit' : 'crit') : '');
     f.results = { hits: 0, misses: 0, notes: new Set() };
   }
 

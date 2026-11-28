@@ -73,7 +73,8 @@ export class Intel {
     }
     // scouts and strikes further out report what they see, late and not quite right
     for (const f of air) {
-      if (f.mission === 'cap') continue;
+      // patrols, and strikes busy attacking or heading home, do not file reports
+      if (f.mission === 'cap' || f.state === 'attack' || f.state === 'return' || f.state === 'holding') continue;
       const items: Contact[] = [];
       for (const e of enemy) {
         if (!e.alive || this.seenShips.has(e) || Math.hypot(f.x - e.x, f.z - e.z) > AIR_SIGHT) continue;
