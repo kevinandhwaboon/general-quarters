@@ -4,9 +4,9 @@ import { DEG, lerp } from '../math';
 import { deckHeight, halfBeam, hullProfile } from '../sim/hull';
 import { BOX, CYL, CYL6, Kit, SPH, TURRET, vertexColourMaterial } from './kit';
 
-export const PALETTE: Record<Nation, { hull: number; sup: number; deck: number; dark: number; boot: number; mast: number; win: number; boat: number }> = {
-  usn: { hull: 0x5f6a75, sup: 0x6a7580, deck: 0x4f5a66, dark: 0x262b30, boot: 0x1d1d1f, mast: 0x9aa3aa, win: 0x171b1f, boat: 0xb9b8b0 },
-  ijn: { hull: 0x7a8187, sup: 0x868d93, deck: 0x7a553c, dark: 0x26292d, boot: 0x44292a, mast: 0x737a80, win: 0x171b1f, boat: 0xb0aea4 },
+export const PALETTE: Record<Nation, { hull: number; sup: number; deck: number; dark: number; boot: number; mast: number; win: number; boat: number; flight: number }> = {
+  usn: { hull: 0x5f6a75, sup: 0x6a7580, deck: 0x4f5a66, dark: 0x262b30, boot: 0x1d1d1f, mast: 0x9aa3aa, win: 0x171b1f, boat: 0xb9b8b0, flight: 0x505b66 },
+  ijn: { hull: 0x7a8187, sup: 0x868d93, deck: 0x7a553c, dark: 0x26292d, boot: 0x44292a, mast: 0x737a80, win: 0x171b1f, boat: 0xb0aea4, flight: 0x8f7352 },
 };
 
 function hullGeometry(c: ShipClass, p: typeof PALETTE['usn']): THREE.BufferGeometry {
@@ -62,6 +62,18 @@ export function buildShipModel(c: ShipClass): ShipModel {
   k.add(hullGeometry(c, p), null);
   for (const sd of [-1, 1]) k.add(BOX, p.dark, [c.L * 0.44, dAt(c.L * 0.44) - 1.4, sd * halfBeam(c, c.L * 0.44) * 0.98], 0, [1.6, 1.2, 0.3]);
   for (let i = 0; i < 6; i++) { const x = lerp(-c.L * 0.42, c.L * 0.4, i / 5); k.add(BOX, p.dark, [x, dAt(x) + 0.15, halfBeam(c, x) * 0.6 * (i % 2 ? 1 : -1)], 0, [2.2, 0.3, 1.6]); }
+  const fd = c.flightDeck;
+  if (fd) {
+    // hangar sides, the open gallery under the deck edge, then the flight deck itself
+    const y0 = dAt(fd.x), top = y0 + fd.y;
+    k.add(BOX, p.sup, [fd.x, y0 + (fd.y - 0.6) / 2, 0], 0, [fd.l * 0.9, fd.y - 0.6, c.B * 0.86]);
+    k.add(BOX, p.dark, [fd.x, top - 1.7, 0], 0, [fd.l * 0.92, 1.3, c.B * 0.9]);
+    k.add(BOX, p.flight, [fd.x, top - 0.3, 0], 0, [fd.l, 0.6, fd.w]);
+    for (const ex of [0.3, 0, -0.32]) k.add(BOX, p.dark, [fd.x + fd.l * ex, top + 0.02, 0], 0, [12, 0.05, 12]);
+    k.add(BOX, 0xd8d8d0, [fd.x, top + 0.04, 0], 0, [fd.l * 0.94, 0.04, 0.5]);
+    for (const sd of [-1, 1]) k.add(BOX, 0xd8d8d0, [fd.x - fd.l * 0.47, top + 0.04, sd * fd.w * 0.3], 0, [3, 0.04, 0.4]);
+    if (c.nation === 'ijn') { k.add(BOX, 0xe8e6de, [fd.x + fd.l * 0.42, top + 0.05, 0], 0, [10, 0.04, 10]); k.add(CYL, 0xb8302a, [fd.x + fd.l * 0.42, top + 0.08, 0], 0, [3.5, 0.04, 3.5]); }
+  }
   for (const b of c.boxes) {
     const y0 = dAt(b.x) + b.y0, h = b.y1 - b.y0;
     k.add(BOX, b.c ?? p.sup, [b.x, y0 + h / 2, b.z ?? 0], 0, [b.l, h, b.w]);
@@ -72,41 +84,43 @@ export function buildShipModel(c: ShipClass): ShipModel {
   // fire-control director on top of the bridge
   if (c.nation === 'usn') {
     const top = c.boxes.reduce((a, b) => (b.x > 0 && b.y1 > a.y1 ? b : a), c.boxes[0]);
-    const y = dAt(top.x) + top.y1, d = Math.min(1, c.B / 24); // destroyers carry a smaller director
-    k.add(BOX, p.sup, [top.x, y + 1.6 * d, 0], 0, [5 * d, 3.2 * d, 5 * d]);
-    k.add(BOX, p.dark, [top.x - 0.5 * d, y + 2.6 * d, 0], 0, [1.2 * d, 0.8 * d, 9 * d]);
-    k.add(BOX, p.mast, [top.x, y + 3.8 * d, 0], 0, [1.4 * d, 1.6 * d, 4.5 * d]);
+    const y = dAt(top.x) + top.y1, d = Math.min(1, c.B / 24, top.w / 6), z = top.z ?? 0; // destroyers and islands carry a smaller director
+    k.add(BOX, p.sup, [top.x, y + 1.6 * d, z], 0, [5 * d, 3.2 * d, 5 * d]);
+    k.add(BOX, p.dark, [top.x - 0.5 * d, y + 2.6 * d, z], 0, [1.2 * d, 0.8 * d, 9 * d]);
+    k.add(BOX, p.mast, [top.x, y + 3.8 * d, z], 0, [1.4 * d, 1.6 * d, 4.5 * d]);
   }
   for (const f of c.funnels) {
-    const y0 = dAt(f.x) + (f.y0 ?? 1.5), rk = (f.rake ?? 0) * DEG;
+    const y0 = dAt(f.x) + (f.y0 ?? 1.5), rk = (f.rake ?? 0) * DEG, fz = f.z ?? 0;
     const at = (u: number): [number, number] => [f.x - Math.sin(rk) * f.h * u, y0 + Math.cos(rk) * f.h * u];
-    let [x1, y1] = at(0.5); k.add(CYL, p.sup, [x1, y1, 0], [0, 0, rk], [f.r, f.h, f.r * 0.74]);
-    [x1, y1] = at(1); k.add(CYL, p.dark, [x1, y1 - 0.5, 0], [0, 0, rk], [f.r * 1.04, 1.2, f.r * 0.77]); k.add(CYL, 0x111111, [x1, y1 + 0.12, 0], [0, 0, rk], [f.r * 0.8, 0.05, f.r * 0.56]);
-    if (f.plat) { [x1, y1] = at(0.62); k.add(CYL, p.sup, [x1, y1, 0], [0, 0, rk], [f.r + 1.5, 0.35, f.r * 0.74 + 1.5]); for (const sd of [-1, 1]) k.add(CYL6, p.dark, [x1, y1 + 0.8, sd * (f.r * 0.74 + 0.9)], 0, [0.55, 1.1, 0.55]); }
-    [x1, y1] = at(0.5); k.add(CYL6, p.sup, [x1 - f.r - 0.5, y1, 0.8], [0, 0, rk], [0.32, f.h * 0.95, 0.32]);
+    let [x1, y1] = at(0.5); k.add(CYL, p.sup, [x1, y1, fz], [0, 0, rk], [f.r, f.h, f.r * 0.74]);
+    [x1, y1] = at(1); k.add(CYL, p.dark, [x1, y1 - 0.5, fz], [0, 0, rk], [f.r * 1.04, 1.2, f.r * 0.77]); k.add(CYL, 0x111111, [x1, y1 + 0.12, fz], [0, 0, rk], [f.r * 0.8, 0.05, f.r * 0.56]);
+    if (f.plat) { [x1, y1] = at(0.62); k.add(CYL, p.sup, [x1, y1, fz], [0, 0, rk], [f.r + 1.5, 0.35, f.r * 0.74 + 1.5]); for (const sd of [-1, 1]) k.add(CYL6, p.dark, [x1, y1 + 0.8, fz + sd * (f.r * 0.74 + 0.9)], 0, [0.55, 1.1, 0.55]); }
+    [x1, y1] = at(0.5); k.add(CYL6, p.sup, [x1 - f.r - 0.5, y1, fz + 0.8], [0, 0, rk], [0.32, f.h * 0.95, 0.32]);
   }
-  for (const m of c.masts) {
-    const y0 = dAt(m.x) + (m.y0 ?? 0), top = y0 + m.h;
-    if (m.k === 'pole') { k.add(CYL6, p.mast, [m.x, y0 + m.h / 2, 0], 0, [0.35, m.h, 0.35]); k.add(BOX, p.mast, [m.x, y0 + m.h * 0.72, 0], 0, [0.3, 0.3, m.h * 0.35]); k.add(BOX, p.mast, [m.x, y0 + m.h * 0.55, 0], 0, [2, 0.3, 2]); }
+  for (const m0 of c.masts) {
+    const m = m0, y0 = dAt(m.x) + (m.y0 ?? 0), top = y0 + m.h;
+    const mk = new Kit();
+    if (m.k === 'pole') { mk.add(CYL6, p.mast, [m.x, y0 + m.h / 2, 0], 0, [0.35, m.h, 0.35]); mk.add(BOX, p.mast, [m.x, y0 + m.h * 0.72, 0], 0, [0.3, 0.3, m.h * 0.35]); mk.add(BOX, p.mast, [m.x, y0 + m.h * 0.55, 0], 0, [2, 0.3, 2]); }
     else if (m.k === 'tower') {
-      k.add(CYL6, p.mast, [m.x, y0 + m.h * 0.45, 0], 0, [1.2, m.h * 0.9, 1.2]);
-      for (const f of [0.45, 0.65, 0.8]) k.add(BOX, p.mast, [m.x, y0 + m.h * f, 0], 0, [3.5 - f * 2, 0.35, 5 - f * 2]);
-      k.add(BOX, p.mast, [m.x, y0 + m.h * 0.88, 0], 0, [0.3, 0.3, 9]);
-      k.add(BOX, p.dark, [m.x + 0.6, y0 + m.h * 0.93, 0], 0, [0.3, 1.8, 3.2]); // radar antenna
-      k.add(CYL6, p.mast, [m.x, top + 2, 0], 0, [0.22, 5, 0.22]);
+      mk.add(CYL6, p.mast, [m.x, y0 + m.h * 0.45, 0], 0, [1.2, m.h * 0.9, 1.2]);
+      for (const f of [0.45, 0.65, 0.8]) mk.add(BOX, p.mast, [m.x, y0 + m.h * f, 0], 0, [3.5 - f * 2, 0.35, 5 - f * 2]);
+      mk.add(BOX, p.mast, [m.x, y0 + m.h * 0.88, 0], 0, [0.3, 0.3, 9]);
+      mk.add(BOX, p.dark, [m.x + 0.6, y0 + m.h * 0.93, 0], 0, [0.3, 1.8, 3.2]); // radar antenna
+      mk.add(CYL6, p.mast, [m.x, top + 2, 0], 0, [0.22, 5, 0.22]);
     } else if (m.k === 'tripod') {
-      k.rod([m.x, y0, 0], [m.x, top, 0], 0.65, p.mast).rod([m.x - 8, y0, -3.6], [m.x, top - 3, 0], 0.45, p.mast).rod([m.x - 8, y0, 3.6], [m.x, top - 3, 0], 0.45, p.mast);
-      k.add(BOX, p.mast, [m.x, top - 1.2, 0], 0, [7, 0.4, 7]); k.add(BOX, p.mast, [m.x, top + 1.4, 0], 0, [5, 2.8, 5]); k.add(BOX, p.win, [m.x, top + 2.1, 0], 0, [5.2, 0.7, 5.2]); k.add(CYL6, p.mast, [m.x, top + 5, 0], 0, [0.25, 5, 0.25]);
+      mk.rod([m.x, y0, 0], [m.x, top, 0], 0.65, p.mast).rod([m.x - 8, y0, -3.6], [m.x, top - 3, 0], 0.45, p.mast).rod([m.x - 8, y0, 3.6], [m.x, top - 3, 0], 0.45, p.mast);
+      mk.add(BOX, p.mast, [m.x, top - 1.2, 0], 0, [7, 0.4, 7]); mk.add(BOX, p.mast, [m.x, top + 1.4, 0], 0, [5, 2.8, 5]); mk.add(BOX, p.win, [m.x, top + 2.1, 0], 0, [5.2, 0.7, 5.2]); mk.add(CYL6, p.mast, [m.x, top + 5, 0], 0, [0.25, 5, 0.25]);
     } else if (m.k === 'cage') {
       const N = 18, r0 = 4.4, r1 = 2.5, yA = y0, yB = top - 2.5;
       for (let i = 0; i < N; i++) { const a = i / N * 2 * Math.PI; for (const sg of [-1, 1]) { const a2 = a + sg * 1.15; lines.push(m.x + Math.cos(a) * r0, yA, Math.sin(a) * r0, m.x + Math.cos(a2) * r1, yB, Math.sin(a2) * r1); } }
-      k.add(CYL, p.mast, [m.x, yB + 2.6, 0], 0, [3.2, 3.4, 3.2]);
+      mk.add(CYL, p.mast, [m.x, yB + 2.6, 0], 0, [3.2, 3.4, 3.2]);
     } else {
       const lv = 8;
-      k.add(CYL6, p.sup, [m.x, y0 + m.h * 0.44, 0], 0, [2.2, m.h * 0.88, 2.2]);
-      for (let i = 0; i < lv; i++) { const f = i / (lv - 1), y = y0 + f * m.h * 0.9, l = lerp(11, 4, f), w = lerp(13, 5, f); k.add(BOX, p.sup, [m.x - f * 1.5, y + 0.5, 0], 0, [l, 1, w]); if (i % 2 || i > lv - 3) k.add(BOX, p.win, [m.x - f * 1.5, y + 1.3, 0], 0, [l * 0.82, 0.7, w * 0.82]); }
-      k.add(BOX, p.dark, [m.x - 1, top + 0.5, 0], 0, [1.6, 0.9, 11]); k.add(CYL6, p.mast, [m.x - 1.5, top + 5, 0], 0, [0.28, 8, 0.28]);
+      mk.add(CYL6, p.sup, [m.x, y0 + m.h * 0.44, 0], 0, [2.2, m.h * 0.88, 2.2]);
+      for (let i = 0; i < lv; i++) { const f = i / (lv - 1), y = y0 + f * m.h * 0.9, l = lerp(11, 4, f), w = lerp(13, 5, f); mk.add(BOX, p.sup, [m.x - f * 1.5, y + 0.5, 0], 0, [l, 1, w]); if (i % 2 || i > lv - 3) mk.add(BOX, p.win, [m.x - f * 1.5, y + 1.3, 0], 0, [l * 0.82, 0.7, w * 0.82]); }
+      mk.add(BOX, p.dark, [m.x - 1, top + 0.5, 0], 0, [1.6, 0.9, 11]); mk.add(CYL6, p.mast, [m.x - 1.5, top + 5, 0], 0, [0.28, 8, 0.28]);
     }
+    k.add(mk.build(), null, [0, 0, m.z ?? 0]);
   }
   if (c.cas) { const { n, x0, x1, y } = c.cas; for (let i = 0; i < n; i++) { const x = lerp(x0, x1, i / (n - 1 || 1)); for (const sd of [-1, 1]) { const z = halfBeam(c, x) * sd, yy = dAt(x) + y; k.add(BOX, p.dark, [x, yy, z], 0, [2.8, 1.5, 0.4]); k.add(CYL6, p.dark, [x + 0.6, yy, z + sd * 2.2], [sd * Math.PI / 2, 0, 0], [0.2, 4.4, 0.2]); } } }
   for (const a of c.secondaries ?? []) for (const sd of [-1, 1]) {

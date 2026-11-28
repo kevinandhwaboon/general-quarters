@@ -1,8 +1,11 @@
-import { FLIGHT_TIME_SCALE, toReal } from '../config';
+import { FLIGHT_TIME_SCALE, KN, toReal } from '../config';
 import { GunSpec, SHELL_LABEL, ShellType } from '../data/guns';
 import { bearing, clamp, DEG, dir, gauss, interp, rnd, segSegDist, wrap } from '../math';
-import { hitTest, HitResult, Impact, OUTCOME_LABEL, resolveHit, Zone, ZONE_LABEL } from './combat';
+import { AirHit, hitTest, HitResult, Impact, OUTCOME_LABEL, resolveHit, Zone, ZONE_LABEL } from './combat';
+import { AirOps } from './air';
+import { CarrierAI } from './carrierAI';
 import { Formation } from './formation';
+import { Intel } from './intel';
 import { canBear, FireControl, Mount, mountBears, restAngle, Ship } from './ship';
 
 export interface Shell {
@@ -34,9 +37,17 @@ export type SimEvent =
   | { type: 'splash'; shell: Shell; x: number; z: number }
   | { type: 'hit'; shell: Shell; result: HitResult }
   | { type: 'log'; text: string; cls: '' | 'hit' | 'crit' | 'own' }
-  | { type: 'magazine'; ship: Ship };
+  | { type: 'magazine'; ship: Ship }
+  | { type: 'bomb'; ship: Ship; hit: AirHit | null; x: number; z: number }
+  | { type: 'torpHit'; ship: Ship; hit: AirHit }
+  | { type: 'planeDown'; x: number; z: number; alt: number; side: Side; n: number }
+  | { type: 'flak'; x: number; z: number; alt: number; n: number };
+
+export type Side = 'player' | 'enemy';
 
 export type EnemyMode = 'idle' | 'steam' | 'zigzag';
+/** Who steers the enemy: the gunnery-test switches, or carrier admirals. */
+export type EnemyControl = 'test' | 'ai';
 
 /** Clearance (game m) beyond a friendly ship's beam inside which a gun will not fire across her. */
 const MASK_MARGIN = 30;
@@ -50,6 +61,17 @@ export class World {
   time = 0;
   enemyMode: EnemyMode = 'idle';
   enemyReturnFire = false;
+  enemyControl: EnemyControl = 'test';
+  readonly air: AirOps = new AirOps(this);
+  readonly intel: Record<Side, Intel> = { player: new Intel('player'), enemy: new Intel('enemy') };
+  /** Carrier admirals (the enemy's, or both sides' in headless trials). */
+  ais: CarrierAI[] = [];
+  /** Fog of war: hide what the player's ships and aircraft cannot see. */
+  fog = false;
+  /** Wind: the bearing it blows from (rad) and its speed (kn). */
+  wind = { from: 120 * DEG, kn: 12 };
+  /** Aircrew quality by side (multiplies air-combat and attack results). */
+  skill: Record<Side, number> = { player: 1, enemy: 1 };
   private nextShell = 1;
   private nextSalvo = 1;
   private zigT = new Map<Ship, number>();
@@ -59,9 +81,29 @@ export class World {
 
   formationOf(s: Ship) { return this.formations.find(f => f.has(s)) ?? null; }
 
+  /** Can this side see that ship now? */
+  visibleTo(side: Side, s: Ship) { return !this.fog || s.side === side || this.intel[side].seenShips.has(s); }
+
+  /**
+   * Wind over a carrier's deck: the apparent wind's speed (kn) and its angle off the bow. Aircraft
+   * take off and land only into a wind of at least 18 knots within 25 degrees of the bow.
+   */
+  windOverDeck(s: Ship) {
+    const [wx, wz] = dir(this.wind.from), [hx, hz] = dir(s.heading);
+    // the wind blows toward -dir(from); the ship's own motion adds a headwind
+    const ax = -wx * this.wind.kn * KN - hx * s.speed, az = -wz * this.wind.kn * KN - hz * s.speed;
+    const kn = Math.hypot(ax, az) / KN, rel = wrap(bearing(0, 0, -ax, -az) - s.heading);
+    return { kn, rel, ok: kn >= 18 && Math.abs(rel) <= 25 * DEG };
+  }
+
   step(dt: number) {
     this.time += dt;
     this.formationStep();
+    for (const ai of this.ais) ai.update(this, dt);
+    this.evade();
+    this.air.step(dt);
+    this.intel.player.update(this, dt);
+    this.intel.enemy.update(this, dt);
     for (const s of this.ships) {
       if (s.side === 'enemy') this.enemyBrain(s, dt);
       s.update(dt);
@@ -73,6 +115,27 @@ export class World {
       const sh = this.shells[i];
       sh.t += dt;
       if (sh.t >= sh.T) { this.shells.splice(i, 1); this.land(sh); }
+    }
+  }
+
+  private evasion = new Map<Ship, { dir: number; flip: number; course: number | null }>();
+  /**
+   * Ships under air attack take evasive action on their own: the helm goes hard over and the turn
+   * is reversed now and then. When the attack is over, the ordered course is restored.
+   */
+  private evade() {
+    for (const s of this.ships) {
+      const e = this.evasion.get(s);
+      const threat = s.alive && this.air.flights.some(f => f.side !== s.side && f.state === 'attack' && f.target === s && f.weapon && f.n > 0 && Math.hypot(f.x - s.x, f.z - s.z) < 7000);
+      if (!threat) {
+        if (e) { this.evasion.delete(s); s.evading = false; if (!this.formationOf(s) || this.formationOf(s)!.guide === s) s.course = e.course ?? s.heading; }
+        continue;
+      }
+      const ev = e ?? { dir: Math.random() < 0.5 ? -1 : 1, flip: this.time + rnd(30, 60), course: s.course };
+      if (!e) this.evasion.set(s, ev);
+      if (this.time > ev.flip) { ev.dir = -ev.dir; ev.flip = this.time + rnd(30, 60); }
+      s.evading = true; s.waypoint = null;
+      s.course = wrap(s.heading + ev.dir * 90 * DEG);
     }
   }
 
@@ -114,13 +177,23 @@ export class World {
 
   private enemyBrain(s: Ship, dt: number) {
     if (!s.alive) return;
-    if (this.enemyMode === 'idle') { s.telegraph = 1; }
-    else if (this.enemyMode === 'steam') { s.telegraph = 4; }
-    else {
-      s.telegraph = 4;
-      const z = (this.zigT.get(s) ?? 0) - dt;
-      this.zigT.set(s, z > 0 ? z : 70);
-      if (z <= 0) s.course = wrap((s.course ?? s.heading) + (Math.random() < 0.5 ? -1 : 1) * rnd(30, 50) * DEG);
+    if (this.enemyControl === 'ai') {
+      // the admiral steers carriers and formations; every ship fights what she can see in range
+      s.holdFire = false;
+      const inRange = (t: Ship | null) => !!t && t.alive && this.visibleTo(s.side, t) && toReal(Math.hypot(t.x - s.x, t.z - s.z)) / 1000 <= s.c.gun.maxRangeKm;
+      if (s.turrets.length && !inRange(s.fc.target)) { const t = this.nearestEnemy(s); s.fc.assign(inRange(t) ? t : null); }
+      return;
+    }
+    const f = this.formationOf(s);
+    if (!f || f.guide === s) {
+      if (this.enemyMode === 'idle') { s.telegraph = 1; }
+      else if (this.enemyMode === 'steam') { s.telegraph = 4; }
+      else {
+        s.telegraph = 4;
+        const z = (this.zigT.get(s) ?? 0) - dt;
+        this.zigT.set(s, z > 0 ? z : 70);
+        if (z <= 0) s.course = wrap((s.course ?? s.heading) + (Math.random() < 0.5 ? -1 : 1) * rnd(30, 50) * DEG);
+      }
     }
     s.holdFire = !this.enemyReturnFire;
     // keep shooting at the current target while it floats; otherwise take the nearest
@@ -128,7 +201,8 @@ export class World {
   }
 
   private damageControl(s: Ship, dt: number) {
-    if (s.fires > 0) { s.hp -= 0.04 * s.fires * dt; if (Math.random() < 0.012 * s.fires * dt) s.fires--; }
+    // US damage control was better (fuel lines drained and filled with CO2, more fire-fighting gear)
+    if (s.fires > 0) { s.hp -= 0.04 * s.fires * dt; if (Math.random() < 0.012 * s.fires * dt * (s.c.nation === 'usn' ? 1.4 : 1)) s.fires--; }
     if (s.flooding > 0) { s.hp -= 0.035 * s.flooding * dt; if (Math.random() < 0.004 * dt) s.flooding--; }
     for (const t of s.turrets) if (t.jam > 0) t.jam = Math.max(0, t.jam - dt);
     // damage control brings knocked-out systems back
@@ -163,7 +237,7 @@ export class World {
     const sec = s.c.sec; if (!sec) return null;
     let best: Ship | null = null, bd = Infinity;
     for (const o of this.ships) {
-      if (o.side === s.side || !o.alive) continue;
+      if (o.side === s.side || !o.alive || !this.visibleTo(s.side, o)) continue;
       const d = toReal(Math.hypot(o.x - s.x, o.z - s.z)) / 1000;
       if (d <= sec.gun.maxRangeKm && d < bd) { bd = d; best = o; }
     }

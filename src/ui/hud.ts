@@ -4,6 +4,7 @@ import { ShipClass } from '../data/ships';
 import { bearing, clamp, DEG, deg3, hms, interp, km, wrap } from '../math';
 import { Zone, ZONE_LABEL } from '../sim/combat';
 import { hullProfile } from '../sim/hull';
+import { STATE_LABEL } from '../sim/air';
 import { Formation, FORMATION_LABEL } from '../sim/formation';
 import { canBear, isAA, isSecondary, Mount, mountBears, Ship, TELEGRAPH } from '../sim/ship';
 import { World } from '../sim/world';
@@ -75,6 +76,7 @@ export class Hud {
     const s = this.src.primary(), t = this.src.target(), sel = this.src.selection().filter(o => o.alive);
     this.renderFleet(sel, s);
     this.renderFormation(sel, s);
+    this.renderAir(s);
     this.renderOwn(s);
     document.querySelectorAll<HTMLButtonElement>('[data-tel]').forEach(b => b.classList.toggle('on', +b.dataset.tel! === s.telegraph));
     document.querySelector('[data-cmd="hold"]')!.classList.toggle('on', sel.length > 0 && sel.every(o => o.holdFire));
@@ -130,6 +132,38 @@ export class Hud {
         <dt>Off station</dt><dd class="${lag ? 'warn' : ''}">${lag ? `${lag} closing up` : 'none'}</dd></dl>
       <div class="note">${guideSel ? (f.turn === 'succession' && f.type === 'column' ? 'Helm orders turn the column in succession: each ship turns where the guide turned.' : 'Helm orders turn every ship together; a column becomes a line of bearing until you re-form.')
         : `Movement orders to ${primary.name} take her out of the formation. Select the guide to manoeuvre it.`}</div>${rejoin}`;
+  }
+
+  /** Air operations for the primary ship if she is a carrier: deck, wind, aircraft, CAP, orders and flights. */
+  private renderAir(s: Ship) {
+    const panel = document.querySelector<HTMLElement>('details[data-k="air"]')!;
+    const any = this.world.ships.some(o => o.side === 'player' && o.air);
+    panel.hidden = !any;
+    if (!any) return;
+    const cs = s.air;
+    if (!cs) { $('air').innerHTML = `<div class="note">Select a carrier to run air operations.</div>`; return; }
+    if (!s.alive) { $('air').innerHTML = `<div class="note bad">${s.name} is sinking. Her aircraft in the air will divert to another carrier if one can take them.</div>`; return; }
+    const wod = this.world.windOverDeck(s), f = this.world.formationOf(s), canSteer = !f || f.guide === s;
+    const deckCls = cs.status === 'ready' ? 'ok' : cs.status.startsWith('flight deck') || cs.status.startsWith('fires') ? 'bad' : cs.status.startsWith('waiting') ? 'warn' : '';
+    const rows = cs.stock.map(st => `<tr><td>${st.type.short}<span class="sub2">${st.type.role === 'fighter' ? 'fighter' : st.type.role === 'dive' ? 'dive bomber' : 'torpedo bomber'}</span></td><td>${st.ready}</td><td>${st.hangar}</td><td>${st.airborne}</td><td class="${st.lost ? 'bad' : ''}">${st.lost}</td></tr>`).join('');
+    const flights = this.world.air.flights.filter(o => o.home === s && o.n > 0 && o.mission !== 'cap');
+    const capN = this.world.air.capStrength(s);
+    const fl = flights.map(o => `<div class="flt"><span>${o.label}</span><span class="st">${o.n} · ${STATE_LABEL[o.state]} · fuel ${Math.round(o.fuel)} km</span>${o.state !== 'return' && o.state !== 'holding' ? `<button class="mini" data-recall="${o.id}">Recall</button>` : '<span></span>'}</div>`).join('');
+    $('air').innerHTML = `<dl class="stats">
+        <dt>Flight deck</dt><dd class="${deckCls}">${cs.status}</dd>
+        <dt>Wind over deck</dt><dd class="${wod.ok ? 'ok' : 'warn'}">${Math.round(wod.kn)} kn · ${Math.round(Math.abs(wod.rel) / DEG)}° ${wod.rel > 0 ? 'stbd' : 'port'} of the bow</dd>
+        ${s.evading ? '<dt>Helm</dt><dd class="warn">evading air attack</dd>' : ''}
+      </dl>
+      ${wod.ok ? '' : `<div class="tip">Aircraft can only take off and land into a wind of 18 knots or more, within 25° of the bow.${canSteer ? '' : ` ${f!.guide.name} guides the formation: turn her.`}</div>`}
+      <table class="calc air"><tr class="sub"><td>Aircraft</td><td>Ready</td><td>Hangar</td><td>Aloft</td><td>Lost</td></tr>${rows}</table>
+      <div class="grid g3">
+        <button class="cmd${!wod.ok && (cs.queue.length || this.world.air.flights.some(o => o.home === s && o.state === 'holding')) ? ' on' : ''}" data-air="wind" title="Steer ${canSteer ? 'her' : 'the formation guide'} into the wind for flight operations">Into wind</button>
+        <button class="cmd" data-air="search" title="Then click the map in the direction to search">Search ▸</button>
+        <button class="cmd" data-air="strike" title="Then click a contact or a point on the map">Strike ▸</button>
+      </div>
+      <div class="caprow"><span>Combat air patrol</span>${[0, 4, 8, 12].map(n => `<button class="mini${cs.capTarget === n ? ' on' : ''}" data-cap="${n}">${n}</button>`).join('')}<span class="st">${capN} up</span></div>
+      ${cs.queue.length ? `<div class="note">Deck queue: ${cs.queue.map(o => o.label).join('; ')}</div>` : ''}
+      ${fl ? `<div class="sub">Flights</div>${fl}` : ''}`;
   }
 
   /** Radar chip: fitted or not, and how long until a knocked-out set is repaired. */
@@ -210,6 +244,7 @@ export class Hud {
 
   private renderFc(s: Ship, est: Estimate) {
     const fc = s.fc, t = fc.target;
+    if (!s.turrets.length) { $('fc').innerHTML = `<div class="note">${s.name} has no main battery; her guns are for anti-aircraft and close defence.</div>${this.secHtml(s)}`; return; }
     if (!t || !t.alive) { $('fc').innerHTML = `${this.ammoHtml(s)}<div class="note">${t && !t.alive ? 'Target destroyed. ' : ''}No target. Click the enemy ship or press <b>T</b> to engage. <b>F</b> changes shell type.</div>${this.secHtml(s)}`; return; }
     const d = Math.hypot(t.x - s.x, t.z - s.z), real = toReal(d);
     const q = fc.quality();

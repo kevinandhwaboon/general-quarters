@@ -1,5 +1,7 @@
+import type { Weapon } from '../data/aircraft';
+import { AIR_TIME_SCALE } from '../config';
 import { fuseThreshold, GunSpec, ShellType } from '../data/guns';
-import { DEG, clamp, dir, interp } from '../math';
+import { DEG, clamp, dir, gauss, interp } from '../math';
 import { columnAt, Part } from './hull';
 import { Mount, Ship, SystemState } from './ship';
 
@@ -257,3 +259,80 @@ function resolveHE(t: Ship, imp: Impact, gun: GunSpec): HitResult {
 export const OUTCOME_LABEL: Record<Outcome, string> = {
   ricochet: 'ricochet', defeated: 'armour held', overpen: 'over-penetration', penetration: 'penetration', citadel: 'CITADEL', burst: 'burst on armour',
 };
+
+/** Result of a bomb or torpedo hit, for the log and the effects. */
+export interface AirHit { u: number; v: number; y: number; notes: string[]; damage: number; critical: boolean; }
+
+/**
+ * A dive bomb that hits. Bombs scatter fore and aft about the point of aim (amidships). On a
+ * carrier, a hit on the flight deck bursts in the hangar: the deck is holed until repaired, fires
+ * start, aircraft aboard are destroyed, and fuelled and armed aircraft may explode (Midway). On
+ * other ships the bomb pierces the deck it can defeat and bursts below, or bursts on the deck.
+ */
+export function resolveBomb(t: Ship, w: Weapon): AirHit {
+  const c = t.c, a = c.armour, notes: string[] = [];
+  const u = clamp(gauss() * c.L * 0.18, -c.L * 0.46, c.L * 0.46), v = (Math.random() - 0.5) * c.B * 0.6;
+  const col = columnAt(c, u, v), y = col?.h ?? c.fb, part = col?.part ?? 'hull';
+  const fire = (p: number) => { if (Math.random() < p) { t.fires++; notes.push('fire'); return true; } return false; };
+  const imp = (zone: Zone, plate: number): Impact => ({ u, v, y, zone, turret: -1, obliquity: 0, plate });
+  let damage = 0, critical = false;
+  const cv = t.air;
+  if (cv && part !== 'conning' && part !== 'funnel' && !(col && part === 'superstructure' && c.boxes.some(b => Math.abs(u - b.x) < b.l / 2 && Math.abs(v - (b.z ?? 0)) < b.w / 2))) {
+    // through the flight deck into the hangar
+    damage = w.damage * 0.6; critical = true;
+    cv.deckRepair += (1200 + Math.random() * 2400) * AIR_TIME_SCALE; // 20-60 minutes of real work per hole
+    notes.push('flight deck holed');
+    fire(0.75);
+    const lost = cv.destroyAboard(1 + Math.random() * 4);
+    const hazard = cv.hazard(c.nation);
+    if (hazard > 0 && Math.random() < Math.min(0.7, 0.03 + 0.02 * hazard)) {
+      const n = 2 + Math.floor(Math.random() * 3);
+      t.fires += n; damage += 5 + hazard * 0.12;
+      const more = cv.destroyAboard(cv.armedAboard * (0.2 + Math.random() * 0.3) + 2);
+      notes.push(`fuelled and armed aircraft explode in the hangar (${lost + more} aircraft destroyed)`);
+    } else if (lost) notes.push(`${lost} aircraft destroyed`);
+    if (w.penMm > a.deck && Math.random() < 0.3) { t.engines = Math.max(0.3, t.engines - 0.25); notes.push('bomb reaches the machinery spaces'); }
+  } else if (part === 'superstructure' || part === 'conning' || part === 'funnel') {
+    damage = w.damage * 0.35;
+    if (Math.random() < 0.5) { t.director = Math.max(0.2, t.director - 0.35); notes.push(cv ? 'island hit, bridge damaged' : 'bridge hit, director damaged'); critical = true; }
+    if (part === 'funnel') { t.engines = Math.max(0.5, t.engines - 0.1); notes.push('uptakes damaged'); }
+    if (splinterSystems(t, imp('superstructure', a.superstructure), 1, notes)) critical = true;
+    fire(0.4);
+  } else {
+    const inCit = u >= a.citadel[0] && u <= a.citadel[1], plate = inCit ? a.deck : a.ends;
+    if (w.penMm >= plate) {
+      damage = w.damage * 0.8; critical = true;
+      notes.push('bomb bursts below decks');
+      fire(0.5);
+      if (inCit && Math.random() < (c.type === 'DD' ? 0.5 : 0.2)) { t.engines = Math.max(0.2, t.engines - 0.3); notes.push('machinery damaged'); }
+    } else {
+      damage = w.damage * 0.25;
+      notes.push('bomb bursts on the armoured deck');
+      splinterSystems(t, imp(inCit ? 'deck' : 'endsDeck', plate), 1, notes);
+      fire(0.3);
+    }
+  }
+  t.hp -= damage;
+  return { u, v, y, notes, damage, critical };
+}
+
+/**
+ * A torpedo that hits and explodes. Side protection absorbs part of it; the rest floods the ship,
+ * which lists toward the hit. Hits aft can jam the rudder; a destroyer may break in two; a carrier
+ * may start leaking aviation fuel.
+ */
+export function resolveTorpedo(t: Ship, w: Weapon, side: 1 | -1): AirHit {
+  const c = t.c, notes: string[] = [], prot = c.torpedoProtection ?? 0;
+  const u = clamp(gauss() * c.L * 0.22, -c.L * 0.45, c.L * 0.45), v = side * c.B / 2;
+  const damage = w.damage * (1 - prot);
+  t.flooding += 1 + Math.round((1 - prot) * 2 + Math.random());
+  t.listSide = side;
+  notes.push('torpedo hit, flooding');
+  const a = c.armour;
+  if (u >= a.citadel[0] && u <= a.citadel[1] && Math.random() < 0.35 * (1 - prot)) { t.engines = Math.max(0.2, t.engines - 0.25); notes.push('machinery spaces flooded'); }
+  if (u < -c.L * 0.36 && Math.random() < 0.5) { t.rudderJam = Math.random() < 0.5 ? 0.5 : -0.5; notes.push('rudder jammed'); }
+  if (c.type === 'DD' && Math.random() < 0.35) { t.hp = 0; notes.push('broken in two'); }
+  if (t.air && Math.random() < 0.4) { t.air.avgasLeak = true; notes.push('aviation fuel leaking'); }
+  t.hp -= damage;
+  return { u, v, y: -2, notes, damage, critical: true };
+}

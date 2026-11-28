@@ -1,13 +1,19 @@
 import * as THREE from 'three';
 import { SHIP_VIS_MAX } from '../config';
+import type { AircraftType } from '../data/aircraft';
 import { clamp, dir, lerp, rnd } from '../math';
 import { Ship } from '../sim/ship';
 import { SimEvent, World } from '../sim/world';
 import { Effects, texGlow, texWater } from './effects';
+import { buildAircraftGeometry } from './aircraftModel';
+import { vertexColourMaterial } from './kit';
 import { buildShipModel, ShipModel } from './shipModel';
 
 export const PITCH = 56 * Math.PI / 180;
 const WN = 44, WAKE_LIFE = 110;
+/** Aircraft altitude is drawn compressed 1:6 (docs/DESIGN.md §3). */
+export const ALT_DRAW = 1 / 6;
+const MAX_PLANES = 320;
 
 export interface ViewState { cx: number; cz: number; W: number; anim: { cx: number; cz: number; W: number } | null; }
 
@@ -31,6 +37,9 @@ export class Renderer3D {
   private ray = new THREE.Raycaster();
   private plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   private wakeMat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, side: THREE.DoubleSide });
+  private planes = new Map<AircraftType, THREE.InstancedMesh>();
+  private m4 = new THREE.Matrix4();
+  private q = new THREE.Quaternion();
 
   constructor(canvas: HTMLCanvasElement, private world: World) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -45,8 +54,8 @@ export class Renderer3D {
     this.sun.shadow.bias = -0.0006;
     this.sun.shadow.normalBias = 0.6;
     this.scene.add(this.sun, this.sun.target);
-    texWater.repeat.set(3000, 3000);
-    this.sea = new THREE.Mesh(new THREE.PlaneGeometry(800_000, 800_000), new THREE.MeshLambertMaterial({ color: 0x1e5f88, map: texWater }));
+    texWater.repeat.set(11000, 11000);
+    this.sea = new THREE.Mesh(new THREE.PlaneGeometry(3_000_000, 3_000_000), new THREE.MeshLambertMaterial({ color: 0x1e5f88, map: texWater }));
     this.sea.rotation.x = -Math.PI / 2;
     this.sea.receiveShadow = true;
     this.scene.add(this.sea);
@@ -118,6 +127,7 @@ export class Renderer3D {
     this.setCamera();
     for (const e of this.world.events) this.onEvent(e);
     this.updateShips(rdt);
+    this.updatePlanes();
     this.updateShells();
     this.effects.update(simDt > 0 ? rdt : 0);
     const map = (this.sea.material as THREE.MeshLambertMaterial).map!;
@@ -144,7 +154,7 @@ export class Renderer3D {
       const tt = performance.now() / 1000 + s.x * 0.001;
       m.inner.rotation.x = Math.sin(tt * 0.8) * 0.008 + s.listAngle;
       m.inner.rotation.z = Math.sin(tt * 0.55) * 0.004 + (s.alive ? 0 : Math.min(0.06, s.sinkT * 0.0006));
-      m.root.visible = !(s.magazine && s.sinkT > 60) && !(!s.alive && s.sinkT > 200);
+      m.root.visible = !(s.magazine && s.sinkT > 60) && !(!s.alive && s.sinkT > 200) && this.world.visibleTo('player', s);
       s.turrets.forEach((tu, i) => { m.turrets[i].rotation.y = -tu.rel; m.turrets[i].rotation.z = tu.alive ? 0 : -0.06; });
       // fires
       const nf = Math.min(5, s.fires + (s.alive ? 0 : 2));
@@ -160,6 +170,57 @@ export class Renderer3D {
       }
       this.updateWake(sv);
     }
+  }
+
+  /** Instanced aircraft: one mesh per type, refilled every frame. */
+  private planeMesh(t: AircraftType) {
+    let m = this.planes.get(t);
+    if (!m) {
+      m = new THREE.InstancedMesh(buildAircraftGeometry(t), vertexColourMaterial, MAX_PLANES);
+      m.frustumCulled = false; m.count = 0;
+      this.scene.add(m); this.planes.set(t, m);
+    }
+    return m;
+  }
+
+  /**
+   * Flights fly in a vee of vees, enlarged when zoomed out so they stay visible (the overlay draws
+   * symbols at strategic zoom). Aircraft spotted on a carrier's deck are drawn parked aft.
+   */
+  private updatePlanes() {
+    const mpp = this.metresPerPixel, counts = new Map<AircraftType, number>(), w = this.world;
+    const show = mpp < 140, k = clamp(9 * mpp / 12, 1, 90);
+    const put = (t: AircraftType, x: number, y: number, z: number, heading: number, sc: number) => {
+      const mesh = this.planeMesh(t), i = counts.get(t) ?? 0;
+      if (i >= MAX_PLANES) return;
+      this.q.setFromAxisAngle(this.v3.set(0, 1, 0), Math.PI / 2 - heading);
+      this.m4.compose(new THREE.Vector3(x, y, z), this.q, new THREE.Vector3(sc, sc, sc));
+      mesh.setMatrixAt(i, this.m4); counts.set(t, i + 1);
+    };
+    if (show) for (const f of w.air.flights) {
+      if (f.n <= 0 || (f.side !== 'player' && w.fog && !w.intel.player.seenFlights.has(f))) continue;
+      const [hx, hz] = dir(f.heading), rx = -hz, rz = hx;
+      for (let j = 0; j < f.n; j++) {
+        const row = Math.ceil(j / 2), side = j === 0 ? 0 : j % 2 ? 1 : -1;
+        const along = -row * f.type.span * 1.15 * k, across = side * row * f.type.span * 0.95 * k;
+        put(f.type, f.x + hx * along + rx * across, Math.max(4, f.alt * ALT_DRAW) + (j % 3) * 3 * k, f.z + hz * along + rz * across, f.heading, k);
+      }
+    }
+    // deck park: aircraft spotted for launch, then ready aircraft, aft of the island
+    for (const s of w.ships) {
+      const cs = s.air, fd = s.c.flightDeck, sv = this.vis.get(s);
+      if (!cs || !fd || !sv || !s.alive || !sv.model.root.visible) continue;
+      const spotted: AircraftType[] = [];
+      for (const o of cs.queue) for (const f of o.flights) for (let j = f.n; j < f.planned; j++) spotted.push(f.type);
+      for (const st of cs.stock) for (let j = 0; j < st.ready; j++) spotted.push(st.type);
+      const top = s.c.fb + fd.y + 1.6, mat = sv.model.inner.matrixWorld;
+      spotted.slice(0, 33).forEach((t, i) => {
+        const row = Math.floor(i / 3), col = (i % 3) - 1;
+        const p = new THREE.Vector3(fd.x - fd.l / 2 + 10 + row * 10.5, top, col * 8).applyMatrix4(mat);
+        put(t, p.x, p.y, p.z, s.heading, s.vs);
+      });
+    }
+    for (const [t, mesh] of this.planes) { mesh.count = counts.get(t) ?? 0; mesh.instanceMatrix.needsUpdate = true; }
   }
 
   private updateWake(sv: ShipVis) {
@@ -239,6 +300,26 @@ export class Renderer3D {
       if (big) this.effects.add('bsmoke', p.x, p.y + 8, p.z, 80 * t.vs);
       if (e.result.outcome === 'ricochet' || e.result.outcome === 'overpen') this.effects.add('splash', p.x + rnd(-20, 20), 0, p.z + rnd(-20, 20), 40 * Math.min(t.vs, 2));
       if (main) this.falls.push({ x: e.shell.lx, z: e.shell.lz, t: this.world.time, hit: true, target: t, shooter: e.shell.shooter });
+    } else if (e.type === 'bomb') {
+      const t = e.ship, vis = this.vis.get(t); if (!vis || !vis.model.root.visible) return;
+      if (e.hit) {
+        const p = vis.model.inner.localToWorld(new THREE.Vector3(e.hit.u, e.hit.y, e.hit.v));
+        this.effects.add('boom', p.x, p.y, p.z, Math.max(80 * t.vs, 14 * mpp));
+        this.effects.add('bsmoke', p.x, p.y + 10, p.z, 90 * t.vs);
+      } else { const d = this.displayNear(t, e.x, e.z); this.effects.add('splash', d.x, 0, d.z, Math.max(60 * Math.min(t.vs, 2), 10 * mpp)); }
+    } else if (e.type === 'torpHit') {
+      const t = e.ship, vis = this.vis.get(t); if (!vis || !vis.model.root.visible) return;
+      const p = vis.model.inner.localToWorld(new THREE.Vector3(e.hit.u, 0, e.hit.v));
+      this.effects.add('splash', p.x, 0, p.z, Math.max(150 * t.vs, 20 * mpp));
+      this.effects.add('boom', p.x, 4, p.z, Math.max(70 * t.vs, 12 * mpp));
+    } else if (e.type === 'planeDown') {
+      if (e.side !== 'player' && this.world.fog && mpp > 140) return;
+      const y = Math.max(4, e.alt * ALT_DRAW);
+      this.effects.add('boom', e.x, y, e.z, Math.max(30, 8 * mpp));
+      this.effects.add('bsmoke', e.x, y, e.z, Math.max(40, 10 * mpp));
+    } else if (e.type === 'flak') {
+      const y = Math.max(4, e.alt * ALT_DRAW);
+      for (let i = 0; i < e.n; i++) this.effects.add('flak', e.x + rnd(-1, 1) * 12 * mpp, y + rnd(-0.5, 0.8) * 10 * mpp, e.z + rnd(-1, 1) * 12 * mpp, Math.max(25, 7 * mpp));
     } else if (e.type === 'magazine') {
       const t = e.ship;
       this.effects.add('big', t.x, 60, t.z, 900 * t.vs);

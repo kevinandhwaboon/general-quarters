@@ -41,8 +41,8 @@ export const texWater = canvasTexture(256, 256, (g, w, h) => {
 texWater.wrapS = texWater.wrapT = THREE.RepeatWrapping;
 texWater.anisotropy = 8;
 
-type Kind = 'flash' | 'boom' | 'big' | 'splash' | 'smoke' | 'bsmoke' | 'gunsmoke';
-const LIFE: Record<Kind, number> = { flash: 0.3, boom: 1, big: 3.2, splash: 4, smoke: 7, bsmoke: 18, gunsmoke: 6 };
+type Kind = 'flash' | 'boom' | 'big' | 'splash' | 'smoke' | 'bsmoke' | 'gunsmoke' | 'flak';
+const LIFE: Record<Kind, number> = { flash: 0.3, boom: 1, big: 3.2, splash: 4, smoke: 7, bsmoke: 18, gunsmoke: 6, flak: 2.6 };
 
 interface Fx { kind: Kind; sp: THREE.Sprite; age: number; size: number; }
 
@@ -60,7 +60,7 @@ export class Effects {
     if (kind === 'flash') sp = this.sprite(texGlow, 0xffc27a, true, 1);
     else if (kind === 'boom' || kind === 'big') sp = this.sprite(texGlow, 0xff8a3a, true, 1);
     else if (kind === 'splash') { sp = this.sprite(texSplash, 0xf2f7ff, false, 0.95); sp.center.set(0.5, 0.02); }
-    else sp = this.sprite(texSmoke, kind === 'bsmoke' ? 0x2a2b2e : kind === 'gunsmoke' ? 0xc9c6bd : 0xa9adb1, false, 0.5);
+    else sp = this.sprite(texSmoke, kind === 'bsmoke' ? 0x2a2b2e : kind === 'gunsmoke' ? 0xc9c6bd : kind === 'flak' ? 0x3a3631 : 0xa9adb1, false, 0.5);
     sp.position.set(x, y, z);
     this.list.push({ kind, sp, age: 0, size });
     this.update(0);
@@ -74,6 +74,7 @@ export class Effects {
       if (f.kind === 'flash') { f.sp.scale.setScalar(s * (1 + a * 5)); m.opacity = 1 - a / L; }
       else if (f.kind === 'boom' || f.kind === 'big') { f.sp.scale.setScalar(s * (0.5 + a * 1.8)); m.opacity = 1 - a / L; }
       else if (f.kind === 'splash') { const h = s * Math.min(1, a / 0.6); f.sp.scale.set(s * 0.34 * (1 + a * 0.35), h, 1); m.opacity = a < 1.6 ? 0.93 : 0.93 * (1 - (a - 1.6) / (L - 1.6)); }
+      else if (f.kind === 'flak') { f.sp.scale.setScalar(s * (0.5 + a * 0.5)); m.opacity = 0.75 * (1 - a / L); }
       else {
         f.sp.scale.setScalar(s * (0.8 + a * (f.kind === 'bsmoke' ? 0.16 : 0.3)));
         f.sp.position.y += dt * s * 0.07; f.sp.position.x -= dt * s * 0.05; f.sp.position.z += dt * s * 0.02;

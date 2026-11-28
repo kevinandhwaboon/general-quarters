@@ -2,6 +2,7 @@ import { KN, toReal } from '../config';
 import { ShellType } from '../data/guns';
 import { ShipClass, TurretDef } from '../data/ships';
 import { bearing, clamp, DEG, dir, gauss, wrap } from '../math';
+import { CarrierState } from './carrier';
 
 export const TELEGRAPH = [
   { key: 'Astern', f: -0.3 },
@@ -192,6 +193,10 @@ export class Ship {
   /** Wake breadcrumbs. */
   hist: { x: number; z: number; h: number; t: number }[] = [];
   histT = 0;
+  /** Taking evasive action under air attack (the captain's own helm orders). */
+  evading = false;
+  /** Carriers: deck and air group; null for other ships. */
+  air: CarrierState | null;
   /** Visual enlargement currently applied (set by the renderer). */
   vs = 1;
 
@@ -205,6 +210,7 @@ export class Ship {
     this.fc = new FireControl(this);
     this.secFc = new FireControl(this, 'sec');
     this.secAmmo = c.sec?.ammo ?? 0;
+    this.air = c.air ? new CarrierState(c.air) : null;
     this.course = this.heading;
     // destroyers' 5-inch guns cannot hurt armour, so they start with HE
     if (c.type === 'DD') this.loadAll('he');

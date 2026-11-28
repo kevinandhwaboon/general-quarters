@@ -1,6 +1,7 @@
 // Headless balance check: Washington engages Kirishima; reports hit rate and time to sink.
 import { ShellType } from '../src/data/guns';
-import { FLETCHER, KONGO, NORTH_CAROLINA, SOUTH_DAKOTA } from '../src/data/ships';
+import { FLETCHER, KAGERO, KONGO, NORTH_CAROLINA, SHOKAKU, SOUTH_DAKOTA, YORKTOWN } from '../src/data/ships';
+import { CarrierAI } from '../src/sim/carrierAI';
 import { Formation, FormationType } from '../src/sim/formation';
 import { DEG, dir } from '../src/math';
 import { Ship } from '../src/sim/ship';
@@ -120,4 +121,59 @@ for (const kind of ['ap', 'he'] as ShellType[]) for (const mode of ['idle', 'ste
     w.ships.pop(); w.shells.length = 0; w.salvos.clear();
   }
   console.log(`masking (turrets not blocked by friends, target at bearing off the bow): ${out.join('  ')}`);
+}
+
+// Carriers. Yorktown with four destroyers against Shōkaku with four, each in a circle, about
+// 110 nm apart. First each side strikes the other's alerted task group once (CAP up, ships turning
+// into the wind); then both admirals fight it out under fog of war.
+{
+  const NM_G = 1852 * 0.3;
+  const taskGroup = (w: World, cv: typeof YORKTOWN, dd: typeof FLETCHER, side: 'player' | 'enemy', x: number, z: number) => {
+    const c = w.add(new Ship(cv, cv.id, side, x, z, 120));
+    const screen = [0, 1, 2, 3].map(i => w.add(new Ship(dd, `${dd.id}${i}`, side, x, z, 120)));
+    const f = new Formation('circle', [c], screen); w.formations.push(f);
+    for (const s of screen) { const st = f.station(s); s.x = st.x; s.z = st.z; }
+    for (const s of [c, ...screen]) { s.telegraph = 4; s.speed = 12; }
+    return c;
+  };
+  const strikeTrial = (attacker: 'player' | 'enemy') => {
+    const w = new World(); w.fog = true; w.enemyControl = 'ai';
+    const yk = taskGroup(w, YORKTOWN, FLETCHER, 'player', 0, 0);
+    const sk = taskGroup(w, SHOKAKU, KAGERO, 'enemy', 0, -110 * NM_G);
+    const [att, def] = attacker === 'player' ? [yk, sk] : [sk, yk];
+    for (let t = 0; t < 900; t++) { for (const c of [yk, sk]) c.course = w.wind.from; w.step(1); w.events.length = 0; }
+    w.air.orderStrike(att, def.x, def.z, { heading: def.heading, kn: 20 });
+    for (let t = 0; t < 5400; t++) { for (const c of [yk, sk]) c.course = w.wind.from; w.step(1); w.events.length = 0; }
+    const st = w.air.stats[attacker], dst = w.air.stats[attacker === 'player' ? 'enemy' : 'player'];
+    return { st, dst, def, sunk: !def.alive, deck: def.air!.deckRepair > 0 || !def.alive, lostAboard: def.air!.stock.reduce((a, s) => a + s.lost, 0) };
+  };
+  for (const attacker of ['player', 'enemy'] as const) {
+    const N = 12, rs = Array.from({ length: N }, () => strikeTrial(attacker));
+    const avg = (f: (r: typeof rs[0]) => number) => (rs.reduce((a, r) => a + f(r), 0) / N).toFixed(1);
+    const lost = (r: typeof rs[0]) => Object.values(r.st.lost).reduce((a, b) => a + b, 0);
+    console.log(`${attacker === 'player' ? 'US strike on Shōkaku' : 'IJN strike on Yorktown'}: bombs ${avg(r => r.st.bombHits)}/${avg(r => r.st.bombs)} hit, torpedoes ${avg(r => r.st.torpHits)}/${avg(r => r.st.torps)} (+${avg(r => r.st.duds)} duds)  attackers lost ${avg(lost)} (AA ${avg(r => r.st.byAA)}, fighters ${avg(r => r.st.byFighters)}, ditched ${avg(r => r.st.ditched)})  defending fighters lost ${avg(r => r.dst.byFighters)}  target deck out ${rs.filter(r => r.deck).length}/${N} sunk ${rs.filter(r => r.sunk).length}/${N}  aircraft lost aboard ${avg(r => r.lostAboard)}`);
+  }
+  // both admirals, fog of war, up to 8 hours
+  const N = 12; let ykSunk = 0, skSunk = 0, ykOut = 0, skOut = 0, firstFind = { player: 0, enemy: 0 }, usLost = 0, ijLost = 0, len = 0, findT = { player: 0, enemy: 0 }, findN = { player: 0, enemy: 0 };
+  for (let i = 0; i < N; i++) {
+    const w = new World(); w.fog = true; w.enemyControl = 'ai';
+    const yk = taskGroup(w, YORKTOWN, FLETCHER, 'player', 0, 0);
+    const sk = taskGroup(w, SHOKAKU, KAGERO, 'enemy', 60 * NM_G, -150 * NM_G);
+    const brg = (a: Ship, b: Ship) => Math.atan2(b.x - a.x, -(b.z - a.z));
+    w.ais = [new CarrierAI('player', { searchBearing: brg(yk, sk) + (Math.random() - 0.5) * 0.6, searchN: 6 }), new CarrierAI('enemy', { searchBearing: brg(sk, yk) + (Math.random() - 0.5) * 0.6, searchN: 6 })];
+    const found: Record<string, number> = {};
+    let t = 0;
+    for (; t < 8 * 3600; t++) {
+      w.step(1); w.events.length = 0;
+      for (const side of ['player', 'enemy'] as const) if (found[side] === undefined && [...w.intel[side].contacts.values()].some(c => c.ship.air)) found[side] = t;
+      if ((!yk.alive || yk.air!.deckRepair > 0) && (!sk.alive || sk.air!.deckRepair > 0) && t > 3600) break;
+    }
+    len += t;
+    if (!yk.alive) ykSunk++; if (!sk.alive) skSunk++;
+    if (!yk.alive || yk.air!.deckRepair > 0) ykOut++; if (!sk.alive || sk.air!.deckRepair > 0) skOut++;
+    for (const side of ['player', 'enemy'] as const) if (found[side] !== undefined) { findT[side] += found[side]; findN[side]++; }
+    if (found.player !== undefined && (found.enemy === undefined || found.player < found.enemy)) firstFind.player++; else if (found.enemy !== undefined) firstFind.enemy++;
+    usLost += Object.values(w.air.stats.player.lost).reduce((a, b) => a + b, 0); ijLost += Object.values(w.air.stats.enemy.lost).reduce((a, b) => a + b, 0);
+  }
+  console.log(`carrier battle (AI v AI, 8 h max): length ${Math.round(len / N / 60)} min  found the other carrier first US ${firstFind.player} IJN ${firstFind.enemy} (US found her in ${findN.player}/${N} after ${Math.round(findT.player / Math.max(1, findN.player) / 60)} min, IJN in ${findN.enemy}/${N} after ${Math.round(findT.enemy / Math.max(1, findN.enemy) / 60)} min)  Yorktown out of action ${ykOut}/${N} sunk ${ykSunk}  Shōkaku out ${skOut}/${N} sunk ${skSunk}  aircraft lost US ${(usLost / N).toFixed(0)} IJN ${(ijLost / N).toFixed(0)}`);
 }

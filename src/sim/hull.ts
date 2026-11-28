@@ -39,8 +39,13 @@ export function columnAt(c: ShipClass, u: number, v: number): { h: number; part:
       if (top > best.h) best = { h: top, part: b.part ?? 'superstructure', turret: -1 };
     }
   }
+  const fd = c.flightDeck;
+  if (fd && Math.abs(u - fd.x) < fd.l / 2 && Math.abs(v) < fd.w / 2) {
+    const top = deckHeight(c, fd.x / (c.L / 2)) + fd.y;
+    if (top > best.h) best = { h: top, part: 'superstructure', turret: -1 };
+  }
   for (const f of c.funnels) {
-    if (Math.hypot(u - f.x, v) < f.r) { const top = deckHeight(c, f.x / (c.L / 2)) + (f.y0 ?? 1.5) + f.h; if (top > best.h) best = { h: top, part: 'funnel', turret: -1 }; }
+    if (Math.hypot(u - f.x, v - (f.z ?? 0)) < f.r) { const top = deckHeight(c, f.x / (c.L / 2)) + (f.y0 ?? 1.5) + f.h; if (top > best.h) best = { h: top, part: 'funnel', turret: -1 }; }
   }
   return best;
 }

@@ -124,3 +124,44 @@ export const GUN_6IN_50_41: GunSpec = {
   traverseDegS: 10,
   he: { name: '15.2 cm common', penMm: 18, damage: 1.2 },
 };
+
+/**
+ * IJN 12.7 cm/50 3rd Year Type in Type C twin destroyer mounts (low-angle, 55 degrees maximum).
+ * Range table approximate; 18.4 km at 45 degrees.
+ */
+export const GUN_127_50_T3: GunSpec = {
+  name: '12.7 cm/50 3rd Year Type',
+  caliberMm: 127,
+  shellKg: 23,
+  muzzleVelocity: 910,
+  reload: 6,
+  maxRangeKm: 18.4,
+  penNormal: [[0, 200], [5, 105], [10, 62], [15, 40], [18.4, 34]],
+  fallDeg: [[0, 0], [5, 4], [10, 12], [15, 26], [18.4, 45]],
+  flightS: [[0, 0], [5, 7], [10, 17], [15, 33], [18.4, 50]],
+  dispRange: 0.009,
+  dispDeflection: 0.003,
+  damage: 1.3,
+  barrelM: 6.4,
+  traverseDegS: 10,
+  he: { name: '12.7 cm common', penMm: 12, damage: 0.75 },
+};
+
+/** IJN 12.7 cm/40 Type 89 high-angle gun (carrier and cruiser AA); used only against aircraft here. */
+export const GUN_127_40_T89: GunSpec = {
+  name: '12.7 cm/40 Type 89',
+  caliberMm: 127,
+  shellKg: 23,
+  muzzleVelocity: 720,
+  reload: 4,
+  maxRangeKm: 14.8,
+  penNormal: [[0, 170], [5, 85], [10, 48], [14.8, 32]],
+  fallDeg: [[0, 0], [5, 5], [10, 16], [14.8, 45]],
+  flightS: [[0, 0], [5, 8], [10, 21], [14.8, 50]],
+  dispRange: 0.01,
+  dispDeflection: 0.0035,
+  damage: 1.3,
+  barrelM: 5.1,
+  traverseDegS: 12,
+  he: { name: '12.7 cm HA common', penMm: 12, damage: 0.75 },
+};

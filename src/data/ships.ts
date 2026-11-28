@@ -1,4 +1,5 @@
-import { GunSpec, GUN_14IN_45_T41, GUN_16IN_45_MK6, GUN_5IN_38_MK12, GUN_6IN_50_41, ShellType } from './guns';
+import { A6M, AircraftType, B5N, D3A, F4F, SBD, TBD } from './aircraft';
+import { GunSpec, GUN_127_40_T89, GUN_127_50_T3, GUN_14IN_45_T41, GUN_16IN_45_MK6, GUN_5IN_38_MK12, GUN_6IN_50_41, ShellType } from './guns';
 
 export type Nation = 'usn' | 'ijn';
 
@@ -18,8 +19,21 @@ export interface TurretDef {
 }
 
 export interface BoxDef { x: number; l: number; w: number; y0: number; y1: number; win?: boolean; wing?: number; z?: number; c?: number; part?: 'superstructure' | 'conning'; }
-export interface FunnelDef { x: number; r: number; h: number; y0?: number; rake?: number; plat?: boolean; }
-export interface MastDef { x: number; h: number; k: 'pole' | 'tripod' | 'cage' | 'pagoda' | 'tower'; y0?: number; }
+export interface FunnelDef { x: number; r: number; h: number; y0?: number; rake?: number; plat?: boolean; /** Offset to starboard (carrier islands). */ z?: number; }
+export interface MastDef { x: number; h: number; k: 'pole' | 'tripod' | 'cage' | 'pagoda' | 'tower'; y0?: number; z?: number; }
+
+/** A carrier's flight deck: centre and length along the hull, width, and height of its surface above the hull deck (m). */
+export interface FlightDeckDef { x: number; l: number; w: number; y: number; }
+
+/** A carrier's air group and the pace of her deck. */
+export interface CarrierDef {
+  group: { type: AircraftType; n: number }[];
+  /** Seconds between aircraft taking off, and between aircraft landing. */
+  launchS: number;
+  recoverS: number;
+  /** Seconds to fuel and arm one aircraft in the hangar. */
+  prepS: number;
+}
 
 export interface Armour {
   /** Main belt thickness (mm) and inclination (deg, top leaning outward). */
@@ -54,7 +68,7 @@ export interface ShipClass {
   id: string;
   label: string;
   nation: Nation;
-  type: 'BB' | 'CA' | 'CL' | 'DD';
+  type: 'CV' | 'BB' | 'CA' | 'CL' | 'DD';
   L: number; B: number; fb: number;
   sheer?: number; fine?: number; tumble?: number; bulge?: boolean;
   maxKn: number;
@@ -72,6 +86,13 @@ export interface ShipClass {
   /** Secondary battery: the gun, guns per mount, HE rounds carried for all of it, and its fire control. */
   sec?: { gun: GunSpec; gunsPerMount: number; ammo: number; fc: FireControlDef };
   crew: string;
+  /** Fraction of a torpedo's effect absorbed by side protection (bulges, torpedo bulkheads). */
+  torpedoProtection?: number;
+  /** Air-search radar (detects aircraft at long range). */
+  airRadar?: boolean;
+  /** Carriers: air group and deck operations. */
+  air?: CarrierDef;
+  flightDeck?: FlightDeckDef;
   // visuals
   boxes: BoxDef[];
   funnels: FunnelDef[];
@@ -106,6 +127,7 @@ export const NORTH_CAROLINA: ShipClass = {
   fc: { rangeErr0: 0.006, spotKeep: 0.45, label: 'Mk 38 director + Mk 3 fire-control radar' },
   sec: { gun: GUN_5IN_38_MK12, gunsPerMount: 2, ammo: 7000, fc: { rangeErr0: 0.012, spotKeep: 0.5, label: 'Mk 37 directors + Mk 4 radar' } }, // 20 guns, about 350 rounds per gun
   crew: 'Trained, radar-equipped',
+  torpedoProtection: 0.5, airRadar: true,
   boxes: [
     { x: 4, l: 74, w: 24, y0: 0, y1: 4.5 },
     { x: 26, l: 18, w: 16, y0: 4.5, y1: 10, win: true, wing: 3, part: 'conning' },
@@ -147,6 +169,7 @@ export const SOUTH_DAKOTA: ShipClass = {
   fc: { rangeErr0: 0.006, spotKeep: 0.45, label: 'Mk 38 director + Mk 3 fire-control radar' },
   sec: { gun: GUN_5IN_38_MK12, gunsPerMount: 2, ammo: 5600, fc: { rangeErr0: 0.012, spotKeep: 0.5, label: 'Mk 37 directors + Mk 4 radar' } }, // 16 guns, about 350 rounds per gun
   crew: 'New ship, radar-equipped',
+  torpedoProtection: 0.5, airRadar: true,
   boxes: [
     { x: 2, l: 60, w: 24, y0: 0, y1: 4.5 },
     { x: 22, l: 16, w: 15, y0: 4.5, y1: 10, win: true, wing: 3, part: 'conning' },
@@ -188,6 +211,7 @@ export const FLETCHER: ShipClass = {
   ],
   fc: { rangeErr0: 0.012, spotKeep: 0.5, label: 'Mk 37 director + Mk 4 radar' },
   crew: 'Trained, radar-equipped',
+  torpedoProtection: 0, airRadar: true,
   boxes: [
     { x: 20, l: 13, w: 9, y0: 0, y1: 3 },
     { x: 21, l: 8, w: 8, y0: 3, y1: 6, win: true, wing: 1.5 },
@@ -199,6 +223,98 @@ export const FLETCHER: ShipClass = {
   radar: true,
   // late 1942: a twin 40 mm aft and four 20 mm (approximate; early ships had a quadruple 1.1-inch)
   aa: [{ k: 'medium', label: '40 mm twin', x: [-14] }, { k: 'light', label: '20 mm', x: [14, -40] }],
+};
+
+/**
+ * Yorktown class, as USS Yorktown (CV-5) in mid-1942. Unarmoured flight and hangar decks, a 4-inch
+ * belt and 1.5-inch protective deck over the machinery, eight single 5-inch/38 in gallery mounts
+ * and a CXAM air-search radar. Air group as at Midway (approximate); AA fit approximate.
+ */
+export const YORKTOWN: ShipClass = {
+  id: 'yorktown', label: 'Yorktown-class carrier', nation: 'usn', type: 'CV',
+  L: 251, B: 25.4, fb: 9, sheer: 0.12, fine: 0.62, tumble: 1,
+  maxKn: 32.5, tacticalDiameter: 750, accel: 0.07, hp: 90,
+  armour: { belt: 102, beltIncl: 0, beltTop: 2, beltBottom: -2.5, citadel: [-60, 70], upperSide: 10, deck: 38, ends: 10, turretFace: 0, turretRoof: 0, conning: 102, superstructure: 10 },
+  gun: GUN_5IN_38_MK12,
+  ammo: { ap: 0, he: 0 },
+  turrets: [],
+  fc: { rangeErr0: 0.015, spotKeep: 0.55, label: 'Mk 33 directors' },
+  sec: { gun: GUN_5IN_38_MK12, gunsPerMount: 1, ammo: 3200, fc: { rangeErr0: 0.015, spotKeep: 0.55, label: 'Mk 33 directors' } },
+  crew: 'Trained, radar-equipped',
+  torpedoProtection: 0.25, airRadar: true,
+  air: { group: [{ type: F4F, n: 25 }, { type: SBD, n: 37 }, { type: TBD, n: 13 }], launchS: 20, recoverS: 30, prepS: 40 },
+  flightDeck: { x: -2, l: 240, w: 26, y: 8 },
+  boxes: [
+    { x: 14, l: 34, w: 6, y0: 8.6, y1: 13, z: 11.5 },
+    { x: 18, l: 14, w: 5.5, y0: 13, y1: 17, z: 11.5, win: true, wing: 1.5, part: 'conning' },
+    { x: 19, l: 8, w: 5, y0: 17, y1: 20, z: 11.5, win: true },
+  ],
+  funnels: [{ x: 3, r: 4.2, h: 9, y0: 13, z: 11.5 }],
+  masts: [{ x: 22, h: 14, k: 'tower', y0: 20, z: 11.5 }],
+  secondaries: [{ x: 74, z: 13.5, y: 6.5 }, { x: 64, z: 13.5, y: 6.5 }, { x: -74, z: 13.5, y: 6.5 }, { x: -84, z: 13, y: 6.5 }],
+  secondaryRole: 'dp',
+  // mid-1942: four quadruple 1.1-inch and about twenty-four 20 mm (approximate)
+  aa: [{ k: 'medium', label: '1.1-inch quad', x: [40, -12] }, { k: 'light', label: '20 mm', x: [100, 88, 50, 30, -4, -30, -50, -64, -94, -104, -112, 110] }],
+};
+
+/**
+ * Shōkaku class, as Shōkaku at Coral Sea, May 1942. Wooden flight deck over an unarmoured hangar,
+ * a belt up to 165 mm over the magazines (46 mm over the machinery), funnels trunked down the
+ * starboard side, eight twin 12.7 cm high-angle mounts and triple 25 mm. No radar yet. Air group
+ * approximate.
+ */
+export const SHOKAKU: ShipClass = {
+  id: 'shokaku', label: 'Shōkaku-class carrier', nation: 'ijn', type: 'CV',
+  L: 257.5, B: 26, fb: 9, sheer: 0.12, fine: 0.6, tumble: 1,
+  maxKn: 34.2, tacticalDiameter: 800, accel: 0.07, hp: 95,
+  armour: { belt: 120, beltIncl: 20, beltTop: 2, beltBottom: -3, citadel: [-70, 75], upperSide: 10, deck: 65, ends: 10, turretFace: 0, turretRoof: 0, conning: 10, superstructure: 10 },
+  gun: GUN_127_40_T89,
+  ammo: { ap: 0, he: 0 },
+  turrets: [],
+  fc: { rangeErr0: 0.02, spotKeep: 0.6, label: 'Type 94 high-angle directors' },
+  crew: 'Veteran',
+  torpedoProtection: 0.3,
+  air: { group: [{ type: A6M, n: 21 }, { type: D3A, n: 27 }, { type: B5N, n: 18 }], launchS: 18, recoverS: 30, prepS: 40 },
+  flightDeck: { x: -4, l: 242, w: 29, y: 8 },
+  boxes: [
+    { x: 54, l: 14, w: 5, y0: 8.6, y1: 13, z: 12, win: true, part: 'conning' },
+    { x: 55, l: 8, w: 4.5, y0: 13, y1: 16, z: 12, win: true },
+  ],
+  funnels: [{ x: 4, r: 2.4, h: 3, y0: 4.5, z: 14.5 }, { x: -6, r: 2.4, h: 3, y0: 4.5, z: 14.5 }],
+  masts: [{ x: 52, h: 9, k: 'pole', y0: 16, z: 12 }],
+  secondaries: [{ x: 92, z: 13.5, y: 6 }, { x: 74, z: 13.5, y: 6 }, { x: -74, z: 13.5, y: 6 }, { x: -92, z: 13, y: 6 }],
+  secondaryRole: 'haa',
+  aa: [{ k: 'light', label: '25 mm triple', x: [82, 52, 22, -22, -52, -82] }],
+};
+
+/**
+ * Kagerō-class destroyer, 1942. Three twin 12.7 cm/50 low-angle mounts, optical fire control,
+ * no radar; torpedoes not modelled yet. AA fit approximate.
+ */
+export const KAGERO: ShipClass = {
+  id: 'kagero', label: 'Kagerō-class destroyer', nation: 'ijn', type: 'DD',
+  L: 118.5, B: 10.8, fb: 4.4, sheer: 0.55, fine: 0.5, tumble: 0.96,
+  maxKn: 35, tacticalDiameter: 700, accel: 0.12, hp: 13,
+  armour: { belt: 0, beltIncl: 0, beltTop: 1.5, beltBottom: -2, citadel: [-25, 25], upperSide: 6, deck: 6, ends: 6, turretFace: 3, turretRoof: 3, conning: 6, superstructure: 6 },
+  gun: GUN_127_50_T3,
+  ammo: { ap: 180, he: 720 }, // 6 guns, about 150 rounds per gun
+  turrets: [
+    { x: 42, h: 6.2, fwd: true, guns: 2, s: 0.7, maxRel: 150 },
+    { x: -30, h: 7.8, fwd: false, guns: 2, s: 0.7, minRel: 35 },
+    { x: -42, h: 5, fwd: false, guns: 2, s: 0.7, minRel: 30 },
+  ],
+  fc: { rangeErr0: 0.02, spotKeep: 0.6, label: 'Type 94 director, optical' },
+  crew: 'Veteran',
+  torpedoProtection: 0,
+  boxes: [
+    { x: 26, l: 10, w: 8, y0: 0, y1: 3 },
+    { x: 26, l: 7, w: 7, y0: 3, y1: 5.6, win: true, wing: 1.2 },
+    { x: 0, l: 30, w: 6, y0: 0, y1: 2 },
+    { x: -22, l: 10, w: 6, y0: 0, y1: 2.6, win: true },
+  ],
+  funnels: [{ x: 9, r: 1.8, h: 6, y0: 2, rake: 8 }, { x: -6, r: 1.6, h: 5.5, y0: 2, rake: 8 }],
+  masts: [{ x: 19, h: 12, k: 'tripod', y0: 5.6 }, { x: -16, h: 9, k: 'pole', y0: 2.6 }],
+  aa: [{ k: 'light', label: '25 mm twin', x: [-2] }],
 };
 
 /** Kongō class after reconstruction, as Kirishima in November 1942. */
@@ -218,6 +334,7 @@ export const KONGO: ShipClass = {
   fc: { rangeErr0: 0.018, spotKeep: 0.55, label: 'Type 94 director, optical rangefinders' },
   sec: { gun: GUN_6IN_50_41, gunsPerMount: 1, ammo: 2100, fc: { rangeErr0: 0.03, spotKeep: 0.65, label: 'casemates, local and group control' } }, // 14 guns, about 150 rounds per gun
   crew: 'Veteran',
+  torpedoProtection: 0.35,
   boxes: [{ x: -2, l: 72, w: 22, y0: 0, y1: 4 }, { x: -56, l: 12, w: 10, y0: 0, y1: 5, win: true }, { x: 40, l: 12, w: 12, y0: 4, y1: 9, part: 'conning' }],
   funnels: [{ x: 13, r: 4, h: 13, y0: 4, rake: 8, plat: true }, { x: -16, r: 3.6, h: 11.5, y0: 4, rake: 8 }],
   masts: [{ x: 38, h: 40, k: 'pagoda', y0: 4 }, { x: -30, h: 22, k: 'tripod', y0: 4 }],
@@ -230,4 +347,4 @@ export const KONGO: ShipClass = {
   catapults: [{ x: -92, z: 0, r: 0.3 }],
 };
 
-export const CLASSES: Record<string, ShipClass> = { northcarolina: NORTH_CAROLINA, southdakota: SOUTH_DAKOTA, fletcher: FLETCHER, kongo: KONGO };
+export const CLASSES: Record<string, ShipClass> = { northcarolina: NORTH_CAROLINA, southdakota: SOUTH_DAKOTA, fletcher: FLETCHER, kongo: KONGO, yorktown: YORKTOWN, shokaku: SHOKAKU, kagero: KAGERO };

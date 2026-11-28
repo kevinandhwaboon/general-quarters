@@ -1,8 +1,10 @@
 import { SHELL_LABEL, ShellType } from './data/guns';
-import { FLETCHER, KONGO, NORTH_CAROLINA, SOUTH_DAKOTA } from './data/ships';
+import { toGame, toReal } from './config';
+import { FLETCHER, KAGERO, KONGO, NORTH_CAROLINA, SHOKAKU, SOUTH_DAKOTA, YORKTOWN } from './data/ships';
 import { bearing, clamp, DEG, dir, wrap } from './math';
 import { Overlay } from './render/overlay';
 import { Renderer3D } from './render/renderer';
+import { CarrierAI } from './sim/carrierAI';
 import { Formation, FORMATION_LABEL, FormationType } from './sim/formation';
 import { Ship, TELEGRAPH } from './sim/ship';
 import { EnemyMode, World } from './sim/world';
@@ -22,9 +24,12 @@ let speed = 1, paused = false, follow = false;
 
 const alive = (ss: Ship[]) => ss.filter(s => s.alive);
 const enemies = () => world.ships.filter(s => s.side === 'enemy');
+const seen = (s: Ship) => world.visibleTo('player', s);
 const primary = () => alive(selection)[0] ?? alive(fleet)[0] ?? fleet[0];
-/** The enemy the panels describe: the primary's target, or the nearest enemy to it. */
-const focusTarget = () => { const p = primary(), t = p.fc.target; return t && t.alive ? t : world.nearestEnemy(p) ?? enemies()[0] ?? null; };
+/** Nearest enemy ship the player can see. */
+const nearestSeen = (p: Ship) => enemies().filter(s => s.alive && seen(s)).sort((a, b) => Math.hypot(a.x - p.x, a.z - p.z) - Math.hypot(b.x - p.x, b.z - p.z))[0] ?? null;
+/** The enemy the panels describe: the primary's target, or the nearest enemy in sight. */
+const focusTarget = () => { const p = primary(), t = p.fc.target; return t && t.alive && seen(t) ? t : nearestSeen(p); };
 /** Ships that receive orders. */
 const ordered = () => alive(selection);
 /** Ships the player commands directly, in the order they are numbered (keys 1-9): everything but screen escorts. */
@@ -35,12 +40,25 @@ const names = (ss: Ship[]) => ss.length === 1 ? ss[0].name : ss.map(shortName).j
 
 const hud = new Hud(world, { fleet: () => fleet, units, formations: () => world.formations.filter(f => f.guide.side === 'player'), selection: () => selection, primary, target: focusTarget });
 
+const SCENARIO = new URLSearchParams(location.search).get('scenario') === 'gunnery' ? 'gunnery' : 'carrier';
+($('scenario') as HTMLSelectElement).value = SCENARIO;
+($('scenario') as HTMLSelectElement).addEventListener('change', e => { location.search = `?scenario=${(e.target as HTMLSelectElement).value}`; });
+
+/** A task group: the guide and her screen in formation, everyone on station. */
+function taskGroup(guide: Ship, screen: Ship[], type: FormationType) {
+  const f = new Formation(type, [guide], screen);
+  world.formations.push(f);
+  for (const s of screen) { const st = f.station(s); s.x = st.x; s.z = st.z; }
+  for (const s of [guide, ...screen]) { s.telegraph = 4; s.speed = 0.85 * guide.maxSpeed; }
+  return f;
+}
+
 /**
- * The trial: Washington leading South Dakota in column at full speed with four destroyers screening
- * ahead, Kirishima about 20 km (real) away on the bow.
+ * Squadron trial: Washington leading South Dakota in column at full speed with four destroyers
+ * screening ahead, Kirishima about 20 km (real) away on the bow.
  */
-function setup() {
-  world.ships.length = 0; world.shells.length = 0; world.salvos.clear(); world.events.length = 0; world.time = 0; world.formations.length = 0;
+function setupGunnery() {
+  $('opName').textContent = 'Squadron trial'; $('opSub').textContent = 'Washington, South Dakota and screen vs Kirishima';
   const lead = world.add(new Ship(NORTH_CAROLINA, 'USS Washington', 'player', 0, 0, 45));
   const second = world.add(new Ship(SOUTH_DAKOTA, 'USS South Dakota', 'player', 0, 0, 45));
   const screen = ['USS Fletcher', "USS O'Bannon", 'USS Nicholas', 'USS Radford'].map(n => world.add(new Ship(FLETCHER, n, 'player', 0, 0, 45)));
@@ -48,19 +66,56 @@ function setup() {
   fleet = [lead, second, ...screen];
   const f = new Formation('column', [lead, second], screen);
   world.formations.push(f);
-  // start every ship on her station
   for (const s of fleet) { if (s !== lead) { const st = f.station(s); s.x = st.x; s.z = st.z; } s.telegraph = 4; s.speed = 0.85 * lead.maxSpeed; }
   kirishima.telegraph = 1;
-  for (const s of world.ships) s.histT = 0;
   selection = [lead, second];
   hud.pushLog('Kirishima sighted fine on the starboard bow. Battleships in column, destroyers screening ahead. Click her to open fire.', 'own');
 }
+
+/**
+ * Carrier trial: Yorktown and four destroyers against Shōkaku and four, somewhere 150-190 nm to
+ * the north-west. Neither side knows where the other is; a patrol plane's report two hours old
+ * gives the player a rough idea.
+ */
+function setupCarrier() {
+  $('opName').textContent = 'Carrier trial'; $('opSub').textContent = 'Yorktown and screen vs Shōkaku · find her first';
+  document.querySelector<HTMLElement>('.test')!.style.display = 'none';
+  world.fog = true; world.enemyControl = 'ai'; world.wind = { from: 120 * DEG, kn: 14 };
+  const yk = world.add(new Ship(YORKTOWN, 'USS Yorktown', 'player', 0, 0, 300));
+  const usdd = ['USS Fletcher', "USS O'Bannon", 'USS Nicholas', 'USS Radford'].map(n => world.add(new Ship(FLETCHER, n, 'player', 0, 0, 300)));
+  taskGroup(yk, usdd, 'circle');
+  const brg = (300 + Math.random() * 60) * DEG, R = toGame((150 + Math.random() * 40) * 1852), [bx, bz] = dir(brg);
+  const sk = world.add(new Ship(SHOKAKU, 'Shōkaku', 'enemy', bx * R, bz * R, 140));
+  const ijdd = ['Isokaze', 'Urakaze', 'Tanikaze', 'Hamakaze'].map(n => world.add(new Ship(KAGERO, n, 'enemy', bx * R, bz * R, 140)));
+  taskGroup(sk, ijdd, 'circle');
+  world.ais = [new CarrierAI('enemy', { searchBearing: brg + Math.PI + (Math.random() - 0.5) * 0.5, searchN: 6 })];
+  // a patrol plane's sighting two hours ago, well off the true position
+  const err = toGame(60_000), ex = bx * R + (Math.random() - 0.5) * err, ez = bz * R + (Math.random() - 0.5) * err;
+  world.intel.player.contacts.set(sk, { ship: sk, x: ex, z: ez, heading: 140 * DEG, time: -2 * 3600, type: 'carrier', exact: false });
+  fleet = [yk, ...usdd];
+  selection = [yk];
+  const nm = Math.round(toReal(Math.hypot(ex, ez)) / 1852), b3 = String(Math.round(((Math.atan2(ex, -ez) / DEG) % 360 + 360) % 360)).padStart(3, '0');
+  hud.pushLog(`A patrol plane reported an enemy carrier two hours ago, ${nm} nm away on bearing ${b3}°. Search for her (Search, then click the map), then strike.`, 'own');
+  hud.pushLog('Yorktown keeps eight fighters on combat air patrol. Flight operations need her heading into the wind.', 'own');
+}
+
+function setup() {
+  world.ships.length = 0; world.shells.length = 0; world.salvos.clear(); world.events.length = 0; world.time = 0; world.formations.length = 0;
+  if (SCENARIO === 'gunnery') setupGunnery(); else setupCarrier();
+  for (const s of world.ships) s.histT = 0;
+}
 setup();
 for (const s of world.ships) r3.addShip(s);
-fitAll(true);
+// ?debug exposes the world for automated browser tests
+if (new URLSearchParams(location.search).has('debug')) Object.assign(window, { gq: { world, r3, select: (s: Ship[]) => { selection = s; } } });
+if (SCENARIO === 'carrier') {
+  // open zoomed out over the task group and the old report
+  const c = [...world.intel.player.contacts.values()][0];
+  Object.assign(r3.view, { cx: c.x / 2, cz: c.z / 2, W: clamp(Math.hypot(c.x, c.z) * 1.6, 20_000, 300_000), anim: null });
+} else fitAll(true);
 
 function fitAll(instant = false) {
-  const ss = alive(world.ships).length ? alive(world.ships) : world.ships;
+  const vis = world.ships.filter(seen), ss = alive(vis).length ? alive(vis) : vis;
   const xs = ss.map(s => s.x), zs = ss.map(s => s.z);
   const x0 = Math.min(...xs), x1 = Math.max(...xs), z0 = Math.min(...zs), z1 = Math.max(...zs);
   const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2 + 300;
@@ -117,7 +172,7 @@ function engage(target?: Ship) {
   const ss = ordered(); if (!ss.length) return;
   const byTarget = new Map<Ship, Ship[]>();
   for (const s of ss) {
-    const t = target && target.alive ? target : world.nearestEnemy(s);
+    const t = target && target.alive ? target : nearestSeen(s);
     if (!t) continue;
     s.fc.assign(t);
     byTarget.set(t, [...(byTarget.get(t) ?? []), s]);
@@ -141,10 +196,10 @@ function toggleHold() {
   hud.pushLog(`${names(ss)}: ${hold ? 'hold fire' : 'weapons free'}`);
 }
 function turnToBeam() {
-  const ss = movers().filter(s => s.fc.target?.alive || world.nearestEnemy(s)); if (!ss.length) return;
+  const ss = movers().filter(s => s.fc.target?.alive || nearestSeen(s)); if (!ss.length) return;
   for (const s of ss) {
     // put the target on the nearer beam so every turret bears
-    const t = s.fc.target?.alive ? s.fc.target : world.nearestEnemy(s)!;
+    const t = s.fc.target?.alive ? s.fc.target : nearestSeen(s)!;
     const rel = wrap(bearing(s.x, s.z, t.x, t.z) - s.heading);
     const want = rel >= 0 ? 90 * DEG : -90 * DEG;
     s.waypoint = null; s.course = wrap(s.heading + rel - want);
@@ -167,7 +222,7 @@ function shipsToForm(): Ship[] {
 }
 /** Line of bearing stepped back on the side away from the enemy, so the line never masks its own fire. */
 function awaySide(g: Ship) {
-  const t = g.fc.target?.alive ? g.fc.target : world.nearestEnemy(g);
+  const t = g.fc.target?.alive ? g.fc.target : nearestSeen(g);
   return t && wrap(bearing(g.x, g.z, t.x, t.z) - g.heading) > 0 ? -135 * DEG : 135 * DEG;
 }
 function form(type: FormationType) {
@@ -229,6 +284,42 @@ function rejoin() {
   pruneSelection();
 }
 
+/* ---------- air operations ---------- */
+let pending: { kind: 'search' | 'strike'; carrier: Ship } | null = null;
+function setPending(p: typeof pending) { pending = p; overlay.pending = p; ovCanvas.style.cursor = p ? 'cell' : ''; }
+/** Steer a carrier (or the guide of her formation) into the wind for flight operations. */
+function intoWind(cv: Ship) {
+  const f = world.formationOf(cv), g = f ? f.guide : cv;
+  g.waypoint = null; g.course = world.wind.from;
+  hud.pushLog(`${g.name}: turning into the wind`);
+}
+/** Carry out a search or strike order at a point on the map (or a contact or ship near it). */
+function airOrder(mx: number, my: number) {
+  if (!pending) return;
+  const cv = pending.carrier, kind = pending.kind;
+  setPending(null);
+  if (!cv.alive || !cv.air) return;
+  const gp = r3.ground(mx, my);
+  let tx = gp.x, tz = gp.z, track: { heading: number; kn: number } | undefined;
+  const ship = shipAt(mx, my);
+  const contact = [...world.intel.player.contacts.values()].filter(c => !c.exact).find(c => { const p = r3.project(c.x, c.z); return Math.hypot(p.x - mx, p.y - my) < 22; });
+  if (ship && ship.side === 'enemy') { tx = ship.x; tz = ship.z; track = { heading: ship.heading, kn: ship.speed / 0.5144 }; }
+  else if (contact) {
+    // dead reckoning from the report: where she should be now at about 20 knots
+    const age = world.time - contact.time, v = 20 * 0.5144, [hx, hz] = dir(contact.heading);
+    tx = contact.x + hx * v * Math.min(age, 3600); tz = contact.z + hz * v * Math.min(age, 3600); track = { heading: contact.heading, kn: 20 };
+  }
+  if (kind === 'search') {
+    const err = world.air.orderSearch(cv, bearing(cv.x, cv.z, tx, tz), 6, 90 * DEG);
+    hud.pushLog(err ? `${cv.name}: ${err}` : `${cv.name}: search ordered, six aircraft across 90° centred on ${String(Math.round(((bearing(cv.x, cv.z, tx, tz) / DEG) % 360 + 360) % 360)).padStart(3, '0')}°`, err ? '' : 'own');
+  } else {
+    const msg = world.air.orderStrike(cv, tx, tz, track);
+    const queued = cv.air.queue.some(o => o.flights.some(f => f.mission === 'strike' && f.n === 0));
+    if (queued) hud.pushLog(`${cv.name}: strike ordered${track ? ' on the contact' : ''}, ${Math.round(toReal(Math.hypot(tx - cv.x, tz - cv.z)) / 1852)} nm out`, 'own');
+    if (msg) hud.pushLog(`${cv.name}: ${msg}`, queued ? 'own' : '');
+  }
+}
+
 document.addEventListener('click', e => {
   const b = (e.target as HTMLElement).closest('button'); if (!b) return;
   if (b.dataset.tel) telegraph(+b.dataset.tel);
@@ -266,8 +357,13 @@ document.addEventListener('click', e => {
 });
 
 // panels are redrawn several times a second, so act on press rather than on click
-const PRESS = 'button[data-shell], button[data-pick], button[data-fsel], button[data-form], button[data-fcmd]';
+const PRESS = 'button[data-shell], button[data-pick], button[data-fsel], button[data-form], button[data-fcmd], button[data-air], button[data-cap], button[data-recall]';
 function press(b: HTMLButtonElement, shift: boolean) {
+  const cv = primary();
+  if (b.dataset.air === 'wind' && cv.air) intoWind(cv);
+  if ((b.dataset.air === 'search' || b.dataset.air === 'strike') && cv.air && cv.alive) setPending(pending?.kind === b.dataset.air ? null : { kind: b.dataset.air, carrier: cv });
+  if (b.dataset.cap && cv.air) { cv.air.capTarget = +b.dataset.cap; hud.pushLog(`${cv.name}: combat air patrol of ${b.dataset.cap} fighters`); }
+  if (b.dataset.recall) { const f = world.air.flights.find(o => o.id === +b.dataset.recall!); if (f) { world.air.recall(f); hud.pushLog(`${f.label}: recalled`); } }
   if (b.dataset.shell) setShell(b.dataset.shell as ShellType);
   if (b.dataset.pick) select([fleet[+b.dataset.pick]], shift);
   if (b.dataset.fsel) { const f = world.formations[+b.dataset.fsel]; if (f) select(f.line, shift); }
@@ -296,6 +392,7 @@ window.addEventListener('keydown', e => {
   else if (k === 'c') form('column'); else if (k === 'b') form('bearing'); else if (k === 'o') form('circle');
   else if (k === 'r') reform(); else if (k === 'v') toggleTurn(); else if (k === 'x') breakFormation();
   else if (/^Digit[1-9]$/.test(e.code) && units()[+e.code.slice(5) - 1]) select([units()[+e.code.slice(5) - 1]], e.shiftKey);
+  else if (k === 'escape') setPending(null);
   else if (k === ' ') { e.preventDefault(); paused = !paused; }
 });
 
@@ -309,6 +406,7 @@ let drag: Drag | null = null, lastPointer = 'mouse';
 function shipAt(mx: number, my: number): Ship | null {
   let best: Ship | null = null, bd = 1e9;
   for (const s of world.ships) {
+    if (!seen(s)) continue;
     const p = r3.project(s.x, s.z), d = Math.hypot(p.x - mx, p.y - my);
     const lim = Math.max(18, s.c.L * s.vs / r3.metresPerPixel * 0.55);
     if (d < lim && d < bd) { bd = d; best = s; }
@@ -331,6 +429,7 @@ ovCanvas.addEventListener('pointerdown', e => {
   if (e.button === 1) e.preventDefault();
 });
 ovCanvas.addEventListener('pointermove', e => {
+  overlay.mouse = local(e);
   if (!drag) return;
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
   if (Math.abs(dx) + Math.abs(dy) > 5) drag.moved = true;
@@ -341,7 +440,9 @@ ovCanvas.addEventListener('pointermove', e => {
 ovCanvas.addEventListener('pointerup', e => {
   if (!drag) return;
   const p = local(e);
-  if (!drag.moved) {
+  if (!drag.moved && pending) {
+    if (drag.button === 0) airOrder(p.x, p.y); else setPending(null);
+  } else if (!drag.moved) {
     if (drag.button === 0) {
       const s = shipAt(p.x, p.y);
       if (s && s.side === 'player') select([pickable(s, e.altKey)], drag.shift || e.shiftKey);
@@ -373,7 +474,7 @@ ovCanvas.addEventListener('wheel', e => {
   const { x: mx, y: my } = local(e);
   const g1 = r3.ground(mx, my);
   r3.view.anim = null;
-  r3.view.W = clamp(r3.view.W * Math.exp(e.deltaY * 0.0013), 500, 60000);
+  r3.view.W = clamp(r3.view.W * Math.exp(e.deltaY * 0.0013), 500, 700_000);
   r3.setCamera();
   const g2 = r3.ground(mx, my);
   r3.view.cx += g1.x - g2.x; r3.view.cz += g1.z - g2.z;
@@ -399,7 +500,8 @@ function frame(now: number) {
   uiT -= rdt;
   if (uiT <= 0) {
     uiT = 0.25; hud.render();
-    $('readout').innerHTML = `View <b>${(r3.view.W / 1000 / 0.3).toFixed(0)} km</b> of range across · ships drawn ×<b>${r3.shipScale().toFixed(1)}</b>`;
+    const across = toReal(r3.view.W);
+    $('readout').innerHTML = `View <b>${across > 100_000 ? Math.round(across / 1852) + ' nm' : (across / 1000).toFixed(0) + ' km'}</b> across · ships drawn ×<b>${r3.shipScale().toFixed(1)}</b>`;
   }
   requestAnimationFrame(frame);
 }
